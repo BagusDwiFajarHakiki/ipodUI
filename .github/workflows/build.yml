@@ -1,0 +1,57 @@
+name: Build Unsigned IPA (iOS 12)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate 4-inch Launch Image (640x1136)
+        run: |
+          mkdir -p Resources
+          python3 -c "
+          import zlib, struct
+          w, h = 640, 1136
+          raw = b''.join(b'\x00' + b'\x14\x14\x14' * w for _ in range(h))
+          def chunk(tag, data):
+              return struct.pack('!I', len(data)) + tag + data + struct.pack('!I', zlib.crc32(tag + data) & 0xffffffff)
+          png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b'')
+          open('Resources/Default-568h@2x.png', 'wb').write(png)
+          "
+
+      - name: Install XcodeGen & Generate Project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build Unsigned .app
+        run: |
+          xcodebuild \
+            -project iPod.xcodeproj \
+            -scheme iPod \
+            -configuration Release \
+            -sdk iphoneos \
+            -arch arm64 \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CONFIGURATION_BUILD_DIR=build/Release-iphoneos \
+            clean build
+
+      - name: Package into .ipa
+        run: |
+          mkdir -p Payload
+          cp -r build/Release-iphoneos/iPod.app Payload/
+          zip -r iPod.ipa Payload
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iPod-IPA
+          path: iPod.ipa

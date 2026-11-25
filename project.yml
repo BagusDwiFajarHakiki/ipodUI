@@ -1,0 +1,36 @@
+name: iPod
+options:
+  bundleIdPrefix: com.local.iPod
+  deploymentTarget:
+    iOS: "12.0"
+targets:iepiod12:
+    type: application
+    platform: iOS
+    deploymentTarget: "12.0"
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.local.iPod
+        INFOPLIST_KEY_CFBundleDisplayName: iPod
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: iPod
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchStoryboardName: ""
+        UIRequiresFullScreen: true
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        UIBackgroundModes:
+          - audio
+        NSAppleMusicUsageDescription: "iPod membutuhkan akses ke pustaka musik untuk menampilkan dan memutar lagu."
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
