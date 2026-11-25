@@ -99,7 +99,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             if !currentQueue.isEmpty {
                 items.append(IPodMenuRow(title: "Now Playing", hasSubmenu: true))
             }
-            return ("SepiaPod", items)
+            return ("iPod", items)
 
         case .music:
             return ("Music", [

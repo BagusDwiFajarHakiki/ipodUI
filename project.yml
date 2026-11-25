@@ -1,9 +1,10 @@
 name: iPod
 options:
-  bundleIdPrefix: com.local.iPod
+  bundleIdPrefix: com.local.ipod
   deploymentTarget:
     iOS: "12.0"
-targets:iepiod12:
+targets:
+  iPod:
     type: application
     platform: iOS
     deploymentTarget: "12.0"
@@ -11,7 +12,7 @@ targets:iepiod12:
       - path: Sources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.local.iPod
+        PRODUCT_BUNDLE_IDENTIFIER: com.local.ipod
         INFOPLIST_KEY_CFBundleDisplayName: iPod
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"

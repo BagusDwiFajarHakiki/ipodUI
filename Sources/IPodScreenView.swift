@@ -355,7 +355,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
     }
 
     func moveSelection(by delta: Int) {
-        guard !nowPlayingContainer.isHidden == false, !rows.isEmpty else { return }
+        guard nowPlayingContainer.isHidden, !rows.isEmpty else { return }
         let next = min(max(0, selectedIndex + delta), rows.count - 1)
         if next != selectedIndex {
             selectedIndex = next
