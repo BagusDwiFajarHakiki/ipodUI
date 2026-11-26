@@ -13,7 +13,7 @@ enum IPodMenuNode {
 
 class IPodViewController: UIViewController, ClickWheelDelegate {
     private let bodyGradient = CAGradientLayer()
-    private let lcdEdgeGlowImageView = UIImageView()
+    private let ambientGlowImageView = UIImageView()
     private let screenView = IPodScreenView()
     private let clickWheel = ClickWheelView()
 
@@ -71,14 +71,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         super.viewDidLayoutSubviews()
         bodyGradient.frame = view.bounds
 
-        let glowSize = lcdEdgeGlowImageView.bounds.size
-        let screenFrameInGlow = screenView.convert(screenView.bounds, to: lcdEdgeGlowImageView)
+        let glowSize = ambientGlowImageView.bounds.size
+        let screenFrameInGlow = screenView.convert(screenView.bounds, to: ambientGlowImageView)
         if glowSize.width > 0, glowSize.height > 0, screenFrameInGlow.width > 0, glowSize != lastGlowSize {
             lastGlowSize = glowSize
-            lcdEdgeGlowImageView.image = makeNaturalLcdGlowImage(
+            ambientGlowImageView.image = makeSmoothLcdAmbientImage(
                 canvasSize: glowSize,
-                lcdRect: screenFrameInGlow,
-                cornerRadius: 6
+                lcdRect: screenFrameInGlow
             )
         }
     }
@@ -86,9 +85,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func setupBodyAndLayout() {
         view.layer.insertSublayer(bodyGradient, at: 0)
 
-        lcdEdgeGlowImageView.contentMode = .scaleToFill
-        lcdEdgeGlowImageView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(lcdEdgeGlowImageView)
+        // Satu kanvas cahaya kontinu tanpa garis/undakan, memutari LCD dan memanjang memudar ke bawah
+        ambientGlowImageView.contentMode = .scaleToFill
+        ambientGlowImageView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(ambientGlowImageView)
 
         screenView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(screenView)
@@ -102,11 +102,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
-            // Ruang ekstra kiri & kanan agar pendaran selebar LCD + sedikit lebih lebar tetap bisa memudar
-            lcdEdgeGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -40),
-            lcdEdgeGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: 28),
-            lcdEdgeGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -48),
-            lcdEdgeGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 48),
+            // Membentang mengelilingi atas, kiri, kanan LCD dan memanjang ke bawah melewati Click Wheel
+            ambientGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -36),
+            ambientGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: 32),
+            ambientGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -36),
+            ambientGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 36),
 
             clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -42),
             clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -115,97 +115,68 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         ])
     }
 
-    // Lebar cahaya disamakan dengan LCD ditambah sedikit pelebaran di kiri & kanan agar proporsional dan memudar halus
-    private func makeNaturalLcdGlowImage(
+    // Menghasilkan pendaran cahaya mulus satu warna tanpa garis/undakan:
+    // - Memutari atas, kiri, kanan, dan bawah LCD
+    // - Memanjang ke bawah sampai area Click Wheel dengan sisi kiri, kanan, dan bawah memudar halus
+    private func makeSmoothLcdAmbientImage(
         canvasSize: CGSize,
-        lcdRect: CGRect,
-        cornerRadius: CGFloat
+        lcdRect: CGRect
     ) -> UIImage? {
+        let w = canvasSize.width
+        let h = canvasSize.height
+        guard w > 1, h > 1 else { return nil }
+
         UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        let extraSideWidth: CGFloat = 10.0
-        let baseGlowRect = lcdRect.insetBy(dx: -extraSideWidth, dy: 0)
+        // 1. Isi cahaya dasar merata (warna seragam, tidak ada bagian lebih terang atau gelap mendadak)
+        ctx.setFillColor(UIColor.white.withAlphaComponent(0.30).cgColor)
+        ctx.fill(CGRect(origin: .zero, size: canvasSize))
 
-        // 1. Pendaran di sekeliling tepi LCD (atas, kiri, kanan, bawah)
-        let surroundFeather: CGFloat = 26.0
-        let surroundSteps = 30
-        for i in 0..<surroundSteps {
-            let t = CGFloat(i) / CGFloat(surroundSteps - 1)
-            let expand = t * surroundFeather
-            let rect = baseGlowRect.insetBy(dx: -expand, dy: -expand)
-            let alpha = pow(1.0 - t, 2.3) * 0.095
-            ctx.setFillColor(UIColor.white.withAlphaComponent(alpha).cgColor)
-            let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius + expand)
-            ctx.addPath(path.cgPath)
-            ctx.fillPath()
-        }
-
-        // 2. Perpanjangan cahaya ke bawah dengan lebar sama persis dengan baseGlowRect (LCD + sedikit pelebaran)
-        let downExtensionHeight = max(0, canvasSize.height - lcdRect.maxY)
-        if downExtensionHeight > 0 {
-            let downSteps = 34
-            for i in 0..<downSteps {
-                let t = CGFloat(i) / CGFloat(downSteps - 1)
-                let currentHeight = t * downExtensionHeight
-                let downRect = CGRect(
-                    x: baseGlowRect.minX,
-                    y: lcdRect.maxY - 2,
-                    width: baseGlowRect.width,
-                    height: max(2, currentHeight)
-                )
-                let alpha = (1.0 - t * 0.65) * pow(1.0 - t, 1.15) * 0.082
-                ctx.setFillColor(UIColor.white.withAlphaComponent(alpha).cgColor)
-                let path = UIBezierPath(roundedRect: downRect, cornerRadius: cornerRadius + t * 8.0)
-                ctx.addPath(path.cgPath)
-                ctx.fillPath()
-            }
-        }
-
-        // 3. Mask horizontal & vertikal agar tepi kiri, kanan, dan bawah memudar lembut tanpa menyempit
+        // 2. Mask horizontal: memudar halus dari kiri dan kanan menuju area LCD
         ctx.setBlendMode(.destinationIn)
-        let maskWidth = canvasSize.width
-        let maskHeight = canvasSize.height
+        let leftSoft = max(0.0, min(0.45, (lcdRect.minX - 24.0) / w))
+        let leftFull = max(leftSoft + 0.05, min(0.48, (lcdRect.minX + 6.0) / w))
+        let rightFull = max(0.52, min(0.95, (lcdRect.maxX - 6.0) / w))
+        let rightSoft = max(rightFull + 0.05, min(1.0, (lcdRect.maxX + 24.0) / w))
 
-        let leftEdgeRatio = max(0.02, min(0.45, (baseGlowRect.minX - 18.0) / max(1.0, maskWidth)))
-        let rightEdgeRatio = max(0.55, min(0.98, (baseGlowRect.maxX + 18.0) / max(1.0, maskWidth)))
         let hColors = [
             UIColor.white.withAlphaComponent(0.0).cgColor,
-            UIColor.white.withAlphaComponent(0.75).cgColor,
+            UIColor.white.withAlphaComponent(0.65).cgColor,
             UIColor.white.withAlphaComponent(1.0).cgColor,
             UIColor.white.withAlphaComponent(1.0).cgColor,
-            UIColor.white.withAlphaComponent(0.75).cgColor,
+            UIColor.white.withAlphaComponent(0.65).cgColor,
             UIColor.white.withAlphaComponent(0.0).cgColor
         ] as CFArray
-        let hLocations: [CGFloat] = [
-            0.0,
-            leftEdgeRatio,
-            min(0.48, leftEdgeRatio + 0.08),
-            max(0.52, rightEdgeRatio - 0.08),
-            rightEdgeRatio,
-            1.0
-        ]
+        let hLocations: [CGFloat] = [0.0, leftSoft, leftFull, rightFull, rightSoft, 1.0]
+
         if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
             ctx.drawLinearGradient(
                 hGrad,
-                start: CGPoint(x: 0, y: maskHeight * 0.5),
-                end: CGPoint(x: maskWidth, y: maskHeight * 0.5),
+                start: CGPoint(x: 0, y: h * 0.5),
+                end: CGPoint(x: w, y: h * 0.5),
                 options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
             )
         }
 
-        let fadeStartRatio = min(0.90, max(0.38, (lcdRect.maxY + downExtensionHeight * 0.45) / max(1, maskHeight)))
+        // 3. Mask vertikal: memudar lembut di bagian paling atas, tetap menyatu di sekitar LCD, lalu memudar halus ke bawah
+        let topFadeEnd = max(0.04, min(0.28, (lcdRect.minY + 12.0) / h))
+        let bottomFadeStart = max(topFadeEnd + 0.10, min(0.88, (lcdRect.maxY + (h - lcdRect.maxY) * 0.55) / h))
+
         let vColors = [
-            UIColor.white.withAlphaComponent(1.0).cgColor,
+            UIColor.white.withAlphaComponent(0.0).cgColor,
             UIColor.white.withAlphaComponent(0.85).cgColor,
+            UIColor.white.withAlphaComponent(1.0).cgColor,
+            UIColor.white.withAlphaComponent(0.75).cgColor,
             UIColor.white.withAlphaComponent(0.0).cgColor
         ] as CFArray
-        let vLocations: [CGFloat] = [0.0, fadeStartRatio, 1.0]
+        let vLocations: [CGFloat] = [0.0, topFadeEnd, max(topFadeEnd + 0.04, lcdRect.maxY / h), bottomFadeStart, 1.0]
+
         if let vGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: vColors, locations: vLocations) {
             ctx.drawLinearGradient(
                 vGrad,
-                start: CGPoint(x: maskWidth * 0.5, y: 0),
-                end: CGPoint(x: maskWidth * 0.5, y: maskHeight),
+                start: CGPoint(x: w * 0.5, y: 0),
+                end: CGPoint(x: w * 0.5, y: h),
                 options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
             )
         }
@@ -242,8 +213,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private func applyGlowColors(_ color: UIColor) {
         let isDark = (screenView.theme == .darkPod)
-        lcdEdgeGlowImageView.tintColor = color
-        lcdEdgeGlowImageView.alpha = isDark ? 0.92 : 0.58
+        ambientGlowImageView.tintColor = color
+        ambientGlowImageView.alpha = isDark ? 0.85 : 0.52
     }
 
     private func updateAmbientGlow(from image: UIImage?) {
