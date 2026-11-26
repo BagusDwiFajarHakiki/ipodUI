@@ -27,7 +27,8 @@ targets:
         CFBundleVersion: "1"
         UILaunchStoryboardName: ""
         UIRequiresFullScreen: true
-        UIStatusBarStyle: UIStatusBarStyleLightContent
+        UIStatusBarHidden: true
+        UIViewControllerBasedStatusBarAppearance: true
         UIBackgroundModes:
           - audio
         NSAppleMusicUsageDescription: "iPod membutuhkan akses ke pustaka musik untuk menampilkan dan memutar lagu."

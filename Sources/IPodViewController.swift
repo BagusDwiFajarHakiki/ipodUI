@@ -18,6 +18,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private var menuStack: [(node: IPodMenuNode, selectedIndex: Int)] = [(.root, 0)]
     private var isNowPlayingActive = false
+    private var isPlaylistsMenuEnabled: Bool = true
 
     private var player: AVPlayer?
     private var playbackTimer: Timer?
@@ -26,8 +27,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var currentTrackIndex: Int = 0
     private var isPlaying = false
 
+    override var prefersStatusBarHidden: Bool {
+        return true
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
+        isPlaylistsMenuEnabled = UserDefaults.standard.object(forKey: "ipod_playlists_enabled") as? Bool ?? true
         setupBodyAndLayout()
         setupAudioSession()
         setupRemoteCommands()
@@ -70,25 +76,25 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         clickWheel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(clickWheel)
 
-        let guide = view.safeAreaLayoutGuide
-        // Spacer transparan di bawah LCD agar Click Wheel selalu berada tepat di tengah vertikal area bawah (jarak atas == jarak bawah == jarak kiri/kanan)
         let bottomAreaGuide = UILayoutGuide()
         view.addLayoutGuide(bottomAreaGuide)
 
         NSLayoutConstraint.activate([
-            screenView.topAnchor.constraint(equalTo: guide.topAnchor, constant: 12),
+            // LCD menempel rapat ke bagian atas layar
+            screenView.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
             screenView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
-            screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.78),
+            screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.82),
 
+            // Area bawah LCD hingga tepi bawah untuk menempatkan Click Wheel sedikit lebih ke atas
             bottomAreaGuide.topAnchor.constraint(equalTo: screenView.bottomAnchor),
-            bottomAreaGuide.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
+            bottomAreaGuide.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -14),
             bottomAreaGuide.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             bottomAreaGuide.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
             clickWheel.centerXAnchor.constraint(equalTo: bottomAreaGuide.centerXAnchor),
             clickWheel.centerYAnchor.constraint(equalTo: bottomAreaGuide.centerYAnchor),
-            clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.70),
+            clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.71),
             clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor)
         ])
     }
@@ -108,15 +114,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func rows(for node: IPodMenuNode) -> (title: String, items: [IPodMenuRow]) {
         switch node {
         case .root:
-            var items = [
+            // Menu Now Playing dihilangkan dari menu utama
+            return ("iPod", [
                 IPodMenuRow(title: "Music", hasSubmenu: true),
                 IPodMenuRow(title: "Shuffle Songs", hasSubmenu: false),
                 IPodMenuRow(title: "Settings", hasSubmenu: true)
-            ]
-            if !currentQueue.isEmpty {
-                items.append(IPodMenuRow(title: "Now Playing", hasSubmenu: true))
-            }
-            return ("iPod", items)
+            ])
 
         case .music:
             return ("Music", [
@@ -144,9 +147,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             return ("Songs", songs.map { IPodMenuRow(title: $0.title, hasSubmenu: false) })
 
         case .settings:
-            let themeLabel = screenView.theme == .sepiaPod ? "Theme: SepiaPod" : "Theme: Classic Blue"
+            let themeLabel = "Theme: \(screenView.theme.displayName)"
+            let playlistToggleLabel = "Playlists Menu: \(isPlaylistsMenuEnabled ? "ON" : "OFF")"
             return ("Settings", [
                 IPodMenuRow(title: themeLabel, hasSubmenu: false),
+                IPodMenuRow(title: playlistToggleLabel, hasSubmenu: false),
                 IPodMenuRow(title: "Reload Music Library", hasSubmenu: false)
             ])
         }
@@ -276,7 +281,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         switch top.node {
         case .root:
             if idx == 0 {
-                pushMenu(.music)
+                // Jika toggle Playlists Menu OFF, klik Music langsung membuka daftar lagu (Songs)
+                if isPlaylistsMenuEnabled {
+                    pushMenu(.music)
+                } else {
+                    pushMenu(.allSongs)
+                }
             } else if idx == 1 {
                 let all = IPodMusicLibrary.shared.allTracks
                 if !all.isEmpty {
@@ -284,8 +294,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 }
             } else if idx == 2 {
                 pushMenu(.settings)
-            } else if idx == 3, !currentQueue.isEmpty {
-                openNowPlayingScreen(animateFromCoverFlow: false)
             }
 
         case .music:
@@ -319,11 +327,18 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         case .settings:
             if idx == 0 {
-                screenView.theme = (screenView.theme == .sepiaPod) ? .classicBlue : .sepiaPod
+                let allThemes = IPodColorTheme.allCases
+                if let currentIdx = allThemes.firstIndex(of: screenView.theme) {
+                    screenView.theme = allThemes[(currentIdx + 1) % allThemes.count]
+                }
                 renderTopMenu(restoreIndex: 0)
             } else if idx == 1 {
-                IPodMusicLibrary.shared.reloadAllSources()
+                isPlaylistsMenuEnabled.toggle()
+                UserDefaults.standard.set(isPlaylistsMenuEnabled, forKey: "ipod_playlists_enabled")
                 renderTopMenu(restoreIndex: 1)
+            } else if idx == 2 {
+                IPodMusicLibrary.shared.reloadAllSources()
+                renderTopMenu(restoreIndex: 2)
             }
         }
     }
