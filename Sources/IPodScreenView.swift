@@ -362,8 +362,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     override init(frame: CGRect) {
         super.init(frame: frame)
         layer.cornerRadius = 8
-        layer.borderWidth = 1.0
-        layer.borderColor = UIColor(white: 1.0, alpha: 0.14).cgColor
+        layer.borderWidth = 0
+        layer.borderColor = nil
         clipsToBounds = true
         setupUI()
         applyTheme()
@@ -779,7 +779,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         clockLabel.textColor = theme.primaryText
 
         if theme == .darkPod {
-            layer.borderColor = UIColor(white: 1.0, alpha: 0.14).cgColor
             headerSubtleTint.colors = [UIColor(white: 1.0, alpha: 0.06).cgColor, UIColor.clear.cgColor]
             playStateIcon.textColor = .white
             coverLoadingSpinner.color = .white
@@ -788,7 +787,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             batteryFill.backgroundColor = UIColor(white: 0.42, alpha: 1.0)
             batteryPercentLabel.textColor = .white
         } else {
-            layer.borderColor = UIColor(white: 0.0, alpha: 0.14).cgColor
             headerSubtleTint.colors = [UIColor(white: 0.0, alpha: 0.05).cgColor, UIColor.clear.cgColor]
             playStateIcon.textColor = theme.primaryText
             coverLoadingSpinner.color = theme.primaryText

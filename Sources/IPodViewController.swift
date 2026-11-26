@@ -15,7 +15,6 @@ enum IPodMenuNode {
 class IPodViewController: UIViewController, ClickWheelDelegate {
     private let bodyGradient = CAGradientLayer()
     private let ambientGlowImageView = UIImageView()
-    private let screenShadowView = UIView()
     private let screenView = IPodScreenView()
     private let clickWheel = ClickWheelView()
 
@@ -166,12 +165,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 wheelRect: wheelFrameInGlow
             )
         }
-        if screenShadowView.bounds.width > 0 {
-            screenShadowView.layer.shadowPath = UIBezierPath(
-                roundedRect: screenShadowView.bounds,
-                cornerRadius: 8
-            ).cgPath
-        }
     }
 
     private func setupBodyAndLayout() {
@@ -180,15 +173,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         ambientGlowImageView.contentMode = .scaleToFill
         ambientGlowImageView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(ambientGlowImageView)
-
-        screenShadowView.backgroundColor = UIColor(red: 0.04, green: 0.04, blue: 0.05, alpha: 1.0)
-        screenShadowView.layer.cornerRadius = 8
-        screenShadowView.layer.shadowColor = UIColor.black.cgColor
-        screenShadowView.layer.shadowOpacity = 0.72
-        screenShadowView.layer.shadowOffset = CGSize(width: 0, height: 2)
-        screenShadowView.layer.shadowRadius = 7
-        screenShadowView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(screenShadowView)
 
         screenView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(screenView)
@@ -205,11 +189,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             screenView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
-
-            screenShadowView.topAnchor.constraint(equalTo: screenView.topAnchor),
-            screenShadowView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor),
-            screenShadowView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor),
-            screenShadowView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor),
 
             ambientGlowImageView.topAnchor.constraint(equalTo: view.topAnchor),
             ambientGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -268,35 +247,42 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        // 1. Soft halo peeking out around top, left, and right edges of the LCD
-        drawEllipticalGlow(
-            in: ctx,
-            center: CGPoint(x: lcdRect.midX, y: lcdRect.midY + lcdRect.height * 0.04),
-            rx: max(w * 0.62, lcdRect.width * 0.72),
-            ry: lcdRect.height * 0.82,
-            peakAlpha: 0.25
-        )
+        // 1. Bright-to-soft Gaussian halo around all 4 sides of the LCD so the LCD perimeter
+        //    stands out cleanly from its own backlight without filling all the way to the screen edges.
+        let haloPath = UIBezierPath(roundedRect: lcdRect.insetBy(dx: 2.0, dy: 2.0), cornerRadius: 8.0)
 
-        // 2. Main soft glow emerging from behind the lower LCD edge
+        ctx.saveGState()
+        ctx.setShadow(offset: .zero, blur: 9.0, color: UIColor.white.withAlphaComponent(0.55).cgColor)
+        UIColor.white.withAlphaComponent(0.10).setFill()
+        haloPath.fill()
+        ctx.restoreGState()
+
+        ctx.saveGState()
+        ctx.setShadow(offset: .zero, blur: 15.0, color: UIColor.white.withAlphaComponent(0.36).cgColor)
+        UIColor.white.withAlphaComponent(0.05).setFill()
+        haloPath.fill()
+        ctx.restoreGState()
+
+        // 2. Soft bloom emerging below the LCD and widening smoothly toward the scroll wheel
+        //    while fading out before reaching the outer edges of the display.
         let upperCenterY = lcdRect.maxY - lcdRect.height * 0.04
-        let upperReachY = max(145.0, (wheelRect.midY - upperCenterY) + 36.0)
+        let upperReachY = max(135.0, (wheelRect.midY - upperCenterY) + 24.0)
         drawEllipticalGlow(
             in: ctx,
             center: CGPoint(x: lcdRect.midX, y: upperCenterY),
-            rx: w * 0.66,
+            rx: lcdRect.width * 0.52,
             ry: upperReachY,
-            peakAlpha: 0.28
+            peakAlpha: 0.24
         )
 
-        // 3. Wide downward diffusion enveloping the gap and extending past the scroll wheel
-        let lowerCenterY = (lcdRect.maxY + wheelRect.midY) * 0.54
-        let lowerReachY = max(180.0, (h - lowerCenterY) + 16.0)
+        let lowerCenterY = (lcdRect.maxY + wheelRect.midY) * 0.52
+        let lowerReachY = max(160.0, (wheelRect.maxY + 12.0) - lowerCenterY)
         drawEllipticalGlow(
             in: ctx,
             center: CGPoint(x: wheelRect.midX, y: lowerCenterY),
-            rx: w * 0.82,
+            rx: w * 0.54,
             ry: lowerReachY,
-            peakAlpha: 0.26
+            peakAlpha: 0.22
         )
 
         let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
@@ -310,19 +296,16 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         switch theme {
         case .darkPod:
-            screenShadowView.layer.shadowOpacity = 0.72
             bodyGradient.colors = [
                 UIColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0).cgColor,
                 UIColor(red: 0.04, green: 0.04, blue: 0.05, alpha: 1.0).cgColor
             ]
         case .sepiaPod:
-            screenShadowView.layer.shadowOpacity = 0.28
             bodyGradient.colors = [
                 UIColor(red: 0.90, green: 0.85, blue: 0.76, alpha: 1.0).cgColor,
                 UIColor(red: 0.80, green: 0.74, blue: 0.63, alpha: 1.0).cgColor
             ]
         case .classicBlue:
-            screenShadowView.layer.shadowOpacity = 0.25
             bodyGradient.colors = [
                 UIColor(white: 0.88, alpha: 1.0).cgColor,
                 UIColor(white: 0.76, alpha: 1.0).cgColor
