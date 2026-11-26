@@ -760,13 +760,13 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             timerFullIconView.widthAnchor.constraint(equalToConstant: 11),
             timerFullIconView.heightAnchor.constraint(equalToConstant: 13),
 
-            sleepLeftStack.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 10),
+            sleepLeftStack.trailingAnchor.constraint(equalTo: progressTouchArea.leadingAnchor, constant: -8),
+            sleepLeftStack.leadingAnchor.constraint(greaterThanOrEqualTo: nowPlayingContainer.leadingAnchor, constant: 8),
             sleepLeftStack.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
-            sleepLeftStack.trailingAnchor.constraint(lessThanOrEqualTo: progressTouchArea.leadingAnchor, constant: -5),
 
-            sleepRightStack.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -10),
+            sleepRightStack.leadingAnchor.constraint(equalTo: progressTouchArea.trailingAnchor, constant: 8),
+            sleepRightStack.trailingAnchor.constraint(lessThanOrEqualTo: nowPlayingContainer.trailingAnchor, constant: -8),
             sleepRightStack.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
-            sleepRightStack.leadingAnchor.constraint(greaterThanOrEqualTo: progressTouchArea.trailingAnchor, constant: 5),
 
             progressTouchArea.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 66),
             progressTouchArea.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -66),
