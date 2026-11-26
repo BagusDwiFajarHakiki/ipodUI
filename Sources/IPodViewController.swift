@@ -8,6 +8,8 @@ enum IPodMenuNode {
     case playlists
     case playlistTracks(IPodPlaylistGroup)
     case allSongs
+    case streaming
+    case streamingSongs(pageIndex: Int)
     case settings
 }
 
@@ -30,6 +32,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var currentQueue: [IPodTrack] = []
     private var currentTrackIndex: Int = 0
     private var isPlaying = false
+    private var isShuffleActive = false
 
     override var prefersStatusBarHidden: Bool {
         return true
@@ -48,7 +51,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         screenView.onCoverFlowTrackSelected = { [weak self] index in
             let songs = IPodMusicLibrary.shared.allTracks
             if songs.indices.contains(index) {
-                self?.startQueue(tracks: songs, at: index)
+                self?.startQueue(tracks: songs, at: index, useRelatedOrder: false)
             }
         }
 
@@ -58,6 +61,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         screenView.onActiveCoverImageChanged = { [weak self] image in
             self?.updateAmbientGlow(from: image)
+        }
+
+        screenView.onStreamingRefreshTapped = { [weak self] in
+            self?.refreshStreamingList()
         }
 
         renderTopMenu(restoreIndex: 0)
@@ -85,7 +92,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func setupBodyAndLayout() {
         view.layer.insertSublayer(bodyGradient, at: 0)
 
-        // Satu kanvas cahaya kontinu tanpa garis/undakan, memutari LCD dan memanjang memudar ke bawah
         ambientGlowImageView.contentMode = .scaleToFill
         ambientGlowImageView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(ambientGlowImageView)
@@ -102,7 +108,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
-            // Membentang mengelilingi atas, kiri, kanan LCD dan memanjang ke bawah melewati Click Wheel
             ambientGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -36),
             ambientGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: 32),
             ambientGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -36),
@@ -115,9 +120,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         ])
     }
 
-    // Menghasilkan pendaran cahaya mulus satu warna tanpa garis/undakan:
-    // - Memutari atas, kiri, kanan, dan bawah LCD
-    // - Memanjang ke bawah sampai area Click Wheel dengan sisi kiri, kanan, dan bawah memudar halus
     private func makeSmoothLcdAmbientImage(
         canvasSize: CGSize,
         lcdRect: CGRect
@@ -129,11 +131,9 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        // 1. Isi cahaya dasar merata (warna seragam, tidak ada bagian lebih terang atau gelap mendadak)
         ctx.setFillColor(UIColor.white.withAlphaComponent(0.30).cgColor)
         ctx.fill(CGRect(origin: .zero, size: canvasSize))
 
-        // 2. Mask horizontal: memudar halus dari kiri dan kanan menuju area LCD
         ctx.setBlendMode(.destinationIn)
         let leftSoft = max(0.0, min(0.45, (lcdRect.minX - 24.0) / w))
         let leftFull = max(leftSoft + 0.05, min(0.48, (lcdRect.minX + 6.0) / w))
@@ -159,7 +159,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             )
         }
 
-        // 3. Mask vertikal: memudar lembut di bagian paling atas, tetap menyatu di sekitar LCD, lalu memudar halus ke bawah
         let topFadeEnd = max(0.04, min(0.28, (lcdRect.minY + 12.0) / h))
         let bottomFadeStart = max(topFadeEnd + 0.10, min(0.88, (lcdRect.maxY + (h - lcdRect.maxY) * 0.55) / h))
 
@@ -290,12 +289,32 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
+    private func refreshStreamingList() {
+        IPodStreamingLibrary.shared.refreshTracks { [weak self] _ in
+            guard let self = self else { return }
+            if let top = self.menuStack.last, case .streamingSongs = top.node {
+                self.menuStack[self.menuStack.count - 1] = (.streamingSongs(pageIndex: 0), 0)
+            }
+            self.renderTopMenu(restoreIndex: 0)
+        }
+    }
+
     private func triggerShuffleSongs() {
-        let all = IPodMusicLibrary.shared.allTracks
-        guard !all.isEmpty else { return }
-        let shuffled = all.shuffled()
+        let streamingPool = IPodStreamingLibrary.shared.allStreamingTracks
+        let offlinePool = IPodMusicLibrary.shared.allTracks
+        let source = !streamingPool.isEmpty ? streamingPool : offlinePool
+        guard !source.isEmpty else { return }
+
+        var shuffled = source.shuffled()
+        if currentQueue.indices.contains(currentTrackIndex), shuffled.count > 1 {
+            let activeId = currentQueue[currentTrackIndex].id
+            if let first = shuffled.first, first.id == activeId {
+                shuffled.swapAt(0, Int.random(in: 1..<shuffled.count))
+            }
+        }
         let randomStartIdx = Int.random(in: 0..<shuffled.count)
-        startQueue(tracks: shuffled, at: randomStartIdx)
+        isShuffleActive = true
+        startQueue(tracks: shuffled, at: randomStartIdx, useRelatedOrder: false)
     }
 
     // MARK: - Menu Navigation Engine
@@ -304,6 +323,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         case .root:
             return ("iPod", [
                 IPodMenuRow(title: "Music", hasSubmenu: true),
+                IPodMenuRow(title: "Streaming", hasSubmenu: true),
                 IPodMenuRow(title: "Settings", hasSubmenu: true)
             ])
 
@@ -312,6 +332,34 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 IPodMenuRow(title: "Playlists", hasSubmenu: true),
                 IPodMenuRow(title: "Songs", hasSubmenu: true)
             ])
+
+        case .streaming:
+            return ("Streaming", [
+                IPodMenuRow(title: "Songs", hasSubmenu: true, valueBadge: "\(IPodStreamingLibrary.shared.allStreamingTracks.count)")
+            ])
+
+        case .streamingSongs(let pageIndex):
+            let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
+            if pageData.tracks.isEmpty {
+                return ("Songs", [IPodMenuRow(title: "Tidak ada lagu streaming", hasSubmenu: false)])
+            }
+            var menuItems = pageData.tracks.map {
+                IPodMenuRow(title: $0.title, hasSubmenu: false, valueBadge: $0.artist)
+            }
+            if pageData.totalPages > 1 {
+                let nextPage = (pageData.currentPage + 1) % pageData.totalPages
+                menuItems.append(
+                    IPodMenuRow(
+                        title: "Next 50 Songs",
+                        hasSubmenu: false,
+                        valueBadge: "\(pageData.currentPage + 1)/\(pageData.totalPages) → \(nextPage + 1)"
+                    )
+                )
+            }
+            let header = pageData.totalPages > 1
+                ? "Songs (\(pageData.currentPage + 1)/\(pageData.totalPages))"
+                : "Songs"
+            return (header, menuItems)
 
         case .playlists:
             var items = [IPodMenuRow(title: "+ New Playlist...", hasSubmenu: false)]
@@ -381,12 +429,18 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             return false
         }()
 
+        let isStreamingSongs = {
+            if case .streamingSongs = top.node { return true }
+            return false
+        }()
+
         let content = rows(for: top.node)
         screenView.showMenu(
             title: content.title,
             items: content.items,
             selectedIndex: restoreIndex,
-            isModernSettings: isSettings
+            isModernSettings: isSettings,
+            showStreamingRefresh: isStreamingSongs
         )
     }
 
@@ -504,6 +558,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                     pushMenu(.allSongs)
                 }
             } else if idx == 1 {
+                pushMenu(.streaming)
+            } else if idx == 2 {
                 pushMenu(.settings)
             }
 
@@ -512,6 +568,22 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             case 0: pushMenu(.playlists)
             case 1: pushMenu(.allSongs)
             default: break
+            }
+
+        case .streaming:
+            if idx == 0 {
+                pushMenu(.streamingSongs(pageIndex: 0))
+            }
+
+        case .streamingSongs(let pageIndex):
+            let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
+            if pageData.tracks.indices.contains(idx) {
+                let chosen = pageData.tracks[idx]
+                startQueue(tracks: IPodStreamingLibrary.shared.allStreamingTracks, at: 0, selectedTrack: chosen, useRelatedOrder: true)
+            } else if pageData.totalPages > 1 && idx == pageData.tracks.count {
+                let nextPage = (pageData.currentPage + 1) % pageData.totalPages
+                menuStack[menuStack.count - 1] = (.streamingSongs(pageIndex: nextPage), 0)
+                renderTopMenu(restoreIndex: 0)
             }
 
         case .playlists:
@@ -527,13 +599,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         case .playlistTracks(let group):
             if group.tracks.indices.contains(idx) {
-                startQueue(tracks: group.tracks, at: idx)
+                startQueue(tracks: group.tracks, at: idx, useRelatedOrder: false)
             }
 
         case .allSongs:
             let songs = IPodMusicLibrary.shared.allTracks
             if songs.indices.contains(idx) {
-                startQueue(tracks: songs, at: idx)
+                startQueue(tracks: songs, at: idx, useRelatedOrder: false)
             }
 
         case .settings:
@@ -574,16 +646,23 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     // MARK: - Native AVPlayer Audio Engine
-    private func startQueue(tracks: [IPodTrack], at index: Int) {
-        guard tracks.indices.contains(index) else { return }
+    private func startQueue(tracks: [IPodTrack], at index: Int, selectedTrack: IPodTrack? = nil, useRelatedOrder: Bool = false) {
+        guard !tracks.isEmpty else { return }
+        let targetTrack: IPodTrack
+        if let explicit = selectedTrack {
+            targetTrack = explicit
+        } else if tracks.indices.contains(index) {
+            targetTrack = tracks[index]
+        } else {
+            return
+        }
+
         let wasCoverFlow = screenView.isCoverFlowActive
         if !menuStack.isEmpty {
             menuStack[menuStack.count - 1].selectedIndex = index
         }
 
-        let targetTrack = tracks[index]
-
-        if currentQueue.indices.contains(currentTrackIndex),
+        if !useRelatedOrder && currentQueue.indices.contains(currentTrackIndex),
            currentQueue[currentTrackIndex].id == targetTrack.id,
            player != nil {
             if !isPlaying {
@@ -595,9 +674,16 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             return
         }
 
-        currentQueue = tracks
-        currentTrackIndex = index
-        playTrack(at: index, transitionDirection: 0)
+        if useRelatedOrder {
+            isShuffleActive = false
+            currentQueue = IPodStreamingLibrary.shared.buildRelatedQueue(startingWith: targetTrack, in: tracks)
+            currentTrackIndex = 0
+        } else {
+            currentQueue = tracks
+            currentTrackIndex = tracks.firstIndex(where: { $0.id == targetTrack.id }) ?? max(0, min(index, tracks.count - 1))
+        }
+
+        playTrack(at: currentTrackIndex, transitionDirection: 0)
         openNowPlayingScreen(animateFromCoverFlow: wasCoverFlow)
     }
 

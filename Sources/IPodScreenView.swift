@@ -261,6 +261,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     var onCoverFlowTrackSelected: ((Int) -> Void)?
     var onSeekRatioChanged: ((Double, Bool) -> Void)?
     var onActiveCoverImageChanged: ((UIImage?) -> Void)?
+    var onStreamingRefreshTapped: (() -> Void)?
 
     // Modern Seamless Status Bar
     private let headerBar = UIView()
@@ -268,6 +269,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let headerTitleLabel = UILabel()
     private let clockLabel = UILabel()
     private let playStateIcon = UILabel()
+    private let refreshButton = UIButton(type: .system)
     private let batteryView = UIView()
     private let batteryCapView = UIView()
     private let batteryFill = UIView()
@@ -349,6 +351,13 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         playStateIcon.textAlignment = .right
         playStateIcon.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(playStateIcon)
+
+        refreshButton.setTitle("↻", for: .normal)
+        refreshButton.titleLabel?.font = UIFont.systemFont(ofSize: 14, weight: .bold)
+        refreshButton.isHidden = true
+        refreshButton.addTarget(self, action: #selector(didTapRefreshButton), for: .touchUpInside)
+        refreshButton.translatesAutoresizingMaskIntoConstraints = false
+        headerBar.addSubview(refreshButton)
 
         batteryView.layer.borderWidth = 1.2
         batteryView.layer.cornerRadius = 3.5
@@ -526,12 +535,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             batteryView.widthAnchor.constraint(equalToConstant: 22),
             batteryView.heightAnchor.constraint(equalToConstant: 11),
 
-            batteryFill.topAnchor.constraint(equalTo: batteryView.topAnchor, constant: 1.8),
-            batteryFill.bottomAnchor.constraint(equalTo: batteryView.bottomAnchor, constant: -1.8),
-            batteryFill.leadingAnchor.constraint(equalTo: batteryView.leadingAnchor, constant: 1.8),
-            batteryFill.widthAnchor.constraint(equalTo: batteryView.widthAnchor, multiplier: batRatio, constant: -3.6),
+            refreshButton.trailingAnchor.constraint(equalTo: batteryView.leadingAnchor, constant: -4),
+            refreshButton.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
+            refreshButton.widthAnchor.constraint(equalToConstant: 22),
+            refreshButton.heightAnchor.constraint(equalToConstant: 22),
 
-            playStateIcon.trailingAnchor.constraint(equalTo: batteryView.leadingAnchor, constant: -6),
+            playStateIcon.trailingAnchor.constraint(equalTo: refreshButton.leadingAnchor, constant: -2),
             playStateIcon.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
             playStateIcon.leadingAnchor.constraint(greaterThanOrEqualTo: clockLabel.trailingAnchor, constant: 4),
 
@@ -613,6 +622,15 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         ])
     }
 
+    @objc private func didTapRefreshButton() {
+        UIView.animate(withDuration: 0.35) {
+            self.refreshButton.transform = CGAffineTransform(rotationAngle: .pi)
+        } completion: { _ in
+            self.refreshButton.transform = .identity
+        }
+        onStreamingRefreshTapped?()
+    }
+
     private func startClockTimer() {
         updateClockText()
         clockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -645,12 +663,14 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         if theme == .darkPod {
             headerSubtleTint.colors = [UIColor(white: 1.0, alpha: 0.06).cgColor, UIColor.clear.cgColor]
             playStateIcon.textColor = .white
+            refreshButton.tintColor = .white
             batteryView.layer.borderColor = UIColor(white: 0.90, alpha: 1.0).cgColor
             batteryCapView.backgroundColor = UIColor(white: 0.90, alpha: 1.0)
             batteryFill.backgroundColor = .white
         } else {
             headerSubtleTint.colors = [UIColor(white: 0.0, alpha: 0.05).cgColor, UIColor.clear.cgColor]
             playStateIcon.textColor = theme.primaryText
+            refreshButton.tintColor = theme.primaryText
             batteryView.layer.borderColor = theme.primaryText.withAlphaComponent(0.75).cgColor
             batteryCapView.backgroundColor = theme.primaryText.withAlphaComponent(0.75)
             batteryFill.backgroundColor = theme.primaryText
@@ -694,9 +714,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         playStateIcon.text = isPlaying ? "▶" : "❚❚"
     }
 
-    func showMenu(title: String, items: [IPodMenuRow], selectedIndex: Int = 0, isModernSettings: Bool = false) {
+    func showMenu(title: String, items: [IPodMenuRow], selectedIndex: Int = 0, isModernSettings: Bool = false, showStreamingRefresh: Bool = false) {
         stopSmoothScrollDisplayLink()
         headerTitleLabel.text = title
+        refreshButton.isHidden = !showStreamingRefresh
         self.rows = items
         self.selectedIndex = min(max(0, selectedIndex), max(0, items.count - 1))
         self.isModernSettingsMenu = isModernSettings
@@ -723,6 +744,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     func showSongsCoverFlow(title: String, tracks: [IPodTrack], selectedIndex: Int = 0, animateFromNowPlaying: Bool = false) {
         stopSmoothScrollDisplayLink()
+        refreshButton.isHidden = true
         let wasNowPlaying = !nowPlayingContainer.isHidden
         let sourceArtworkFrame = artworkView.convert(artworkView.bounds, to: self)
         let sourceArtworkImage = artworkView.image
@@ -919,6 +941,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         let sourceCoverFrame = wasCoverFlow ? currentCoverFlowCenterFrame() : .zero
 
         stopSmoothScrollDisplayLink()
+        refreshButton.isHidden = true
         headerTitleLabel.text = "Now Playing"
         tableView.isHidden = true
         coverFlowContainer.isHidden = true
