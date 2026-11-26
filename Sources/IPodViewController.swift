@@ -30,6 +30,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var isSleepTimerActive: Bool = false
     private var sleepActivationTimer: Timer?
     private var sleepCountdownTimer: Timer?
+    private var sleepFadeTimer: Timer?
+    private var sleepVolumeScale: Float = 1.0
     private var isPlaylistsMenuEnabled: Bool = true
     private var isAmbientGlowEnabled: Bool = true
     private var currentGlowColor = UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
@@ -1212,6 +1214,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         let avPlayer = AVPlayer(playerItem: item)
         avPlayer.automaticallyWaitsToMinimizeStalling = true
+        avPlayer.volume = sleepVolumeScale
         player = avPlayer
         if resumeFromSeconds > 1.0 {
             let seekTarget = CMTime(seconds: resumeFromSeconds, preferredTimescale: 600)
@@ -1341,6 +1344,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         sleepActivationTimer = nil
         sleepCountdownTimer?.invalidate()
         sleepCountdownTimer = nil
+        sleepFadeTimer?.invalidate()
+        sleepFadeTimer = nil
+        sleepVolumeScale = 1.0
+        player?.volume = 1.0
         isSleepTimerActive = false
 
         sleepSetMinutes = min(max(0, minutes), 60)
@@ -1358,10 +1365,35 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
+    private func startSleepAudioFadeOut(duration: TimeInterval) {
+        sleepFadeTimer?.invalidate()
+        let safeDuration = max(duration, 0.5)
+        let startTime = Date().timeIntervalSinceReferenceDate
+        sleepFadeTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timer in
+            guard let self = self, self.isSleepTimerActive else {
+                timer.invalidate()
+                return
+            }
+            let elapsed = Date().timeIntervalSinceReferenceDate - startTime
+            let progress = min(max(elapsed / safeDuration, 0.0), 1.0)
+            // Smooth ease-out volume ramp down to 0
+            let nextVol = Float(pow(1.0 - progress, 1.4))
+            self.sleepVolumeScale = nextVol
+            self.player?.volume = nextVol
+            if progress >= 1.0 {
+                timer.invalidate()
+            }
+        }
+    }
+
     private func activateSleepTimer() {
         sleepActivationTimer = nil
         guard sleepSetMinutes >= 1 else { return }
 
+        sleepFadeTimer?.invalidate()
+        sleepFadeTimer = nil
+        sleepVolumeScale = 1.0
+        player?.volume = 1.0
         isSleepTimerActive = true
         sleepElapsedSeconds = 0
         screenView.updateSleepTimerDisplay(
@@ -1380,9 +1412,15 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 elapsedSeconds: self.sleepElapsedSeconds,
                 isActive: true
             )
+            let remaining = targetSeconds - self.sleepElapsedSeconds
+            if remaining <= 5 && remaining > 0 && self.sleepFadeTimer == nil {
+                self.startSleepAudioFadeOut(duration: TimeInterval(remaining))
+            }
             if self.sleepElapsedSeconds >= targetSeconds {
                 self.sleepCountdownTimer?.invalidate()
                 self.sleepCountdownTimer = nil
+                self.sleepFadeTimer?.invalidate()
+                self.sleepFadeTimer = nil
                 self.isSleepTimerActive = false
                 self.sleepSetMinutes = 0
                 self.sleepElapsedSeconds = 0
@@ -1390,6 +1428,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 if self.isPlaying {
                     self.togglePlayPause()
                 }
+                self.sleepVolumeScale = 1.0
+                self.player?.volume = 1.0
                 self.screenView.showStatusBanner("Waktu tidur selesai • Musik dijeda")
             }
         }

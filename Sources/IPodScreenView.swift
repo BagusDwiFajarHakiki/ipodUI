@@ -357,12 +357,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let remainingLabel = UILabel()
     private let volumeMuteIconView = UIImageView()
     private let volumeFullIconView = UIImageView()
-    private let sleepLeftStack = UIStackView()
-    private let timerEmptyIconView = UIImageView()
     private let sleepCountdownLabel = UILabel()
-    private let sleepRightStack = UIStackView()
     private let sleepTargetLabel = UILabel()
-    private let timerFullIconView = UIImageView()
     private var progressWidthConstraint: NSLayoutConstraint!
     private var isScrubbing = false
     private(set) var barMode: IPodNowPlayingBarMode = .duration
@@ -567,41 +563,18 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         volumeFullIconView.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(volumeFullIconView)
 
-        sleepLeftStack.axis = .horizontal
-        sleepLeftStack.alignment = .center
-        sleepLeftStack.spacing = 2.5
-        sleepLeftStack.isHidden = true
-        sleepLeftStack.translatesAutoresizingMaskIntoConstraints = false
-        nowPlayingContainer.addSubview(sleepLeftStack)
-
-        timerEmptyIconView.image = makeTimerEmptyIcon(size: CGSize(width: 11, height: 13))
-        timerEmptyIconView.contentMode = .scaleAspectFit
-        timerEmptyIconView.translatesAutoresizingMaskIntoConstraints = false
-        sleepLeftStack.addArrangedSubview(timerEmptyIconView)
-
-        sleepCountdownLabel.text = "00:00"
-        sleepCountdownLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
-        sleepCountdownLabel.textAlignment = .left
-        sleepCountdownLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        sleepLeftStack.addArrangedSubview(sleepCountdownLabel)
-
-        sleepRightStack.axis = .horizontal
-        sleepRightStack.alignment = .center
-        sleepRightStack.spacing = 2.5
-        sleepRightStack.isHidden = true
-        sleepRightStack.translatesAutoresizingMaskIntoConstraints = false
-        nowPlayingContainer.addSubview(sleepRightStack)
+        sleepCountdownLabel.text = "0:00"
+        sleepCountdownLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
+        sleepCountdownLabel.isHidden = true
+        sleepCountdownLabel.translatesAutoresizingMaskIntoConstraints = false
+        nowPlayingContainer.addSubview(sleepCountdownLabel)
 
         sleepTargetLabel.text = "OFF"
-        sleepTargetLabel.font = UIFont.systemFont(ofSize: 11.5, weight: .bold)
-        sleepTargetLabel.textAlignment = .center
-        sleepTargetLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        sleepRightStack.addArrangedSubview(sleepTargetLabel)
-
-        timerFullIconView.image = makeTimerFullIcon(size: CGSize(width: 11, height: 13))
-        timerFullIconView.contentMode = .scaleAspectFit
-        timerFullIconView.translatesAutoresizingMaskIntoConstraints = false
-        sleepRightStack.addArrangedSubview(timerFullIconView)
+        sleepTargetLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
+        sleepTargetLabel.textAlignment = .right
+        sleepTargetLabel.isHidden = true
+        sleepTargetLabel.translatesAutoresizingMaskIntoConstraints = false
+        nowPlayingContainer.addSubview(sleepTargetLabel)
 
         progressTouchArea.backgroundColor = .clear
         progressTouchArea.isUserInteractionEnabled = true
@@ -755,23 +728,13 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             volumeFullIconView.widthAnchor.constraint(equalToConstant: 24),
             volumeFullIconView.heightAnchor.constraint(equalToConstant: 14),
 
-            timerEmptyIconView.widthAnchor.constraint(equalToConstant: 11),
-            timerEmptyIconView.heightAnchor.constraint(equalToConstant: 13),
+            sleepCountdownLabel.leadingAnchor.constraint(equalTo: elapsedLabel.leadingAnchor),
+            sleepCountdownLabel.trailingAnchor.constraint(equalTo: elapsedLabel.trailingAnchor),
+            sleepCountdownLabel.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
 
-            sleepCountdownLabel.widthAnchor.constraint(equalToConstant: 35),
-
-            timerFullIconView.widthAnchor.constraint(equalToConstant: 11),
-            timerFullIconView.heightAnchor.constraint(equalToConstant: 13),
-
-            sleepTargetLabel.widthAnchor.constraint(equalToConstant: 35),
-
-            sleepLeftStack.trailingAnchor.constraint(equalTo: progressTouchArea.leadingAnchor, constant: -8),
-            sleepLeftStack.leadingAnchor.constraint(greaterThanOrEqualTo: nowPlayingContainer.leadingAnchor, constant: 8),
-            sleepLeftStack.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
-
-            sleepRightStack.leadingAnchor.constraint(equalTo: progressTouchArea.trailingAnchor, constant: 8),
-            sleepRightStack.trailingAnchor.constraint(lessThanOrEqualTo: nowPlayingContainer.trailingAnchor, constant: -8),
-            sleepRightStack.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
+            sleepTargetLabel.leadingAnchor.constraint(equalTo: remainingLabel.leadingAnchor),
+            sleepTargetLabel.trailingAnchor.constraint(equalTo: remainingLabel.trailingAnchor),
+            sleepTargetLabel.centerYAnchor.constraint(equalTo: remainingLabel.centerYAnchor),
 
             progressTouchArea.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 66),
             progressTouchArea.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -66),
@@ -876,7 +839,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         remainingLabel.textColor = theme.secondaryText
         volumeMuteIconView.tintColor = theme.secondaryText
         volumeFullIconView.tintColor = theme.secondaryText
-        timerEmptyIconView.tintColor = theme.secondaryText
         sleepCountdownLabel.textColor = theme.secondaryText
         updateSleepTimerColors()
         progressTrack.backgroundColor = theme == .darkPod ? UIColor(white: 0.28, alpha: 1.0) : UIColor(white: 0.78, alpha: 1.0)
@@ -1243,7 +1205,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         stopSmoothScrollDisplayLink()
         coverLoadingSpinner.stopAnimating()
         coverLoadingStack.isHidden = true
-        headerTitleLabel.text = "Now Playing"
+        headerTitleLabel.text = headerTitle(for: barMode)
         tableView.isHidden = true
         coverFlowContainer.isHidden = true
         isCoverFlowActive = false
@@ -1278,8 +1240,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             remainingLabel.alpha = 0.0
             volumeMuteIconView.alpha = 0.0
             volumeFullIconView.alpha = 0.0
-            sleepLeftStack.alpha = 0.0
-            sleepRightStack.alpha = 0.0
+            sleepCountdownLabel.alpha = 0.0
+            sleepTargetLabel.alpha = 0.0
 
             UIView.animate(
                 withDuration: 0.30,
@@ -1295,8 +1257,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                     self.remainingLabel.alpha = 1.0
                     self.volumeMuteIconView.alpha = 1.0
                     self.volumeFullIconView.alpha = 1.0
-                    self.sleepLeftStack.alpha = 1.0
-                    self.sleepRightStack.alpha = 1.0
+                    self.sleepCountdownLabel.alpha = 1.0
+                    self.sleepTargetLabel.alpha = 1.0
                 },
                 completion: { _ in
                     self.artworkView.alpha = 1.0
@@ -1333,6 +1295,14 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lastDisplayedTrackId = track.id
     }
 
+    private func headerTitle(for mode: IPodNowPlayingBarMode) -> String {
+        switch mode {
+        case .duration:   return "Now Playing"
+        case .volume:     return "Volume"
+        case .sleepTimer: return "Sleep Time"
+        }
+    }
+
     func setNowPlayingBarMode(
         _ mode: IPodNowPlayingBarMode,
         volume: Float,
@@ -1341,12 +1311,15 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         isSleepActive: Bool
     ) {
         barMode = mode
+        if !nowPlayingContainer.isHidden {
+            headerTitleLabel.text = headerTitle(for: mode)
+        }
         elapsedLabel.isHidden = (mode != .duration)
         remainingLabel.isHidden = (mode != .duration)
         volumeMuteIconView.isHidden = (mode != .volume)
         volumeFullIconView.isHidden = (mode != .volume)
-        sleepLeftStack.isHidden = (mode != .sleepTimer)
-        sleepRightStack.isHidden = (mode != .sleepTimer)
+        sleepCountdownLabel.isHidden = (mode != .sleepTimer)
+        sleepTargetLabel.isHidden = (mode != .sleepTimer)
 
         switch mode {
         case .duration:
@@ -1376,25 +1349,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lastSleepActive = isActive
 
         let displayElapsed = isActive ? max(0, elapsedSeconds) : 0
-        sleepCountdownLabel.text = formatSleepTime(TimeInterval(displayElapsed))
+        sleepCountdownLabel.text = formatTime(TimeInterval(displayElapsed))
+        sleepTargetLabel.text = setMinutes > 0 ? formatTime(TimeInterval(setMinutes * 60)) : "OFF"
         updateSleepTimerColors()
-        if setMinutes > 0 {
-            sleepTargetLabel.attributedText = nil
-            sleepTargetLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
-            sleepTargetLabel.textAlignment = .right
-            sleepTargetLabel.text = formatSleepTime(TimeInterval(setMinutes * 60))
-        } else {
-            sleepTargetLabel.text = nil
-            sleepTargetLabel.textAlignment = .center
-            sleepTargetLabel.attributedText = NSAttributedString(
-                string: "OFF",
-                attributes: [
-                    .font: UIFont.systemFont(ofSize: 11.5, weight: .bold),
-                    .kern: 1.8,
-                    .foregroundColor: theme.secondaryText
-                ]
-            )
-        }
 
         guard barMode == .sleepTimer, !isScrubbing else { return }
         layoutIfNeeded()
@@ -1419,24 +1376,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private func updateSleepTimerColors() {
         let activeColor = lastSleepActive ? theme.highlightTop : (lastSleepSetMinutes > 0 ? theme.primaryText : theme.secondaryText)
         sleepTargetLabel.textColor = activeColor
-        timerFullIconView.tintColor = activeColor
-        if lastSleepSetMinutes == 0 {
-            sleepTargetLabel.attributedText = NSAttributedString(
-                string: "OFF",
-                attributes: [
-                    .font: UIFont.systemFont(ofSize: 11.5, weight: .bold),
-                    .kern: 1.8,
-                    .foregroundColor: activeColor
-                ]
-            )
-        }
-    }
-
-    private func formatSleepTime(_ sec: TimeInterval) -> String {
-        let total = Int(sec)
-        let m = total / 60
-        let s = total % 60
-        return String(format: "%02d:%02d", m, s)
     }
 
     func updateProgress(elapsed: TimeInterval, duration: TimeInterval, fromScrub: Bool = false) {
@@ -1451,82 +1390,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
         elapsedLabel.text = formatTime(elapsed)
         remainingLabel.text = "-\(formatTime(max(0, safeDur - elapsed)))"
-    }
-
-    private func makeTimerEmptyIcon(size: CGSize) -> UIImage? {
-        UIGraphicsBeginImageContextWithOptions(size, false, 0)
-        defer { UIGraphicsEndImageContext() }
-        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
-
-        let w = size.width
-        let h = size.height
-        UIColor.white.setStroke()
-        UIColor.white.setFill()
-
-        // Top & bottom caps
-        ctx.fill(CGRect(x: 1.5, y: 1.0, width: w - 3.0, height: 1.4))
-        ctx.fill(CGRect(x: 1.5, y: h - 2.4, width: w - 3.0, height: 1.4))
-
-        // Empty hourglass outline
-        let framePath = UIBezierPath()
-        framePath.move(to: CGPoint(x: 2.5, y: 2.4))
-        framePath.addLine(to: CGPoint(x: w - 2.5, y: 2.4))
-        framePath.addLine(to: CGPoint(x: w / 2.0 + 1.0, y: h / 2.0))
-        framePath.addLine(to: CGPoint(x: w - 2.5, y: h - 2.4))
-        framePath.addLine(to: CGPoint(x: 2.5, y: h - 2.4))
-        framePath.addLine(to: CGPoint(x: w / 2.0 - 1.0, y: h / 2.0))
-        framePath.close()
-        framePath.lineWidth = 1.2
-        framePath.stroke()
-
-        // Tiny exhausted line at very bottom
-        ctx.fill(CGRect(x: 3.4, y: h - 3.6, width: w - 6.8, height: 1.0))
-
-        return UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
-    }
-
-    private func makeTimerFullIcon(size: CGSize) -> UIImage? {
-        UIGraphicsBeginImageContextWithOptions(size, false, 0)
-        defer { UIGraphicsEndImageContext() }
-        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
-
-        let w = size.width
-        let h = size.height
-        UIColor.white.setStroke()
-        UIColor.white.setFill()
-
-        // Top & bottom caps
-        ctx.fill(CGRect(x: 1.5, y: 1.0, width: w - 3.0, height: 1.4))
-        ctx.fill(CGRect(x: 1.5, y: h - 2.4, width: w - 3.0, height: 1.4))
-
-        // Hourglass outline
-        let framePath = UIBezierPath()
-        framePath.move(to: CGPoint(x: 2.5, y: 2.4))
-        framePath.addLine(to: CGPoint(x: w - 2.5, y: 2.4))
-        framePath.addLine(to: CGPoint(x: w / 2.0 + 1.0, y: h / 2.0))
-        framePath.addLine(to: CGPoint(x: w - 2.5, y: h - 2.4))
-        framePath.addLine(to: CGPoint(x: 2.5, y: h - 2.4))
-        framePath.addLine(to: CGPoint(x: w / 2.0 - 1.0, y: h / 2.0))
-        framePath.close()
-        framePath.lineWidth = 1.2
-        framePath.stroke()
-
-        // Full sand in top and bottom bulbs
-        let topSand = UIBezierPath()
-        topSand.move(to: CGPoint(x: 3.3, y: 3.1))
-        topSand.addLine(to: CGPoint(x: w - 3.3, y: 3.1))
-        topSand.addLine(to: CGPoint(x: w / 2.0, y: h / 2.0 - 0.5))
-        topSand.close()
-        topSand.fill()
-
-        let bottomSand = UIBezierPath()
-        bottomSand.move(to: CGPoint(x: w / 2.0, y: h / 2.0 + 1.4))
-        bottomSand.addLine(to: CGPoint(x: w - 3.3, y: h - 2.8))
-        bottomSand.addLine(to: CGPoint(x: 3.3, y: h - 2.8))
-        bottomSand.close()
-        bottomSand.fill()
-
-        return UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
     }
 
     private func makeVolumeMuteIcon(size: CGSize) -> UIImage? {
