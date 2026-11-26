@@ -15,7 +15,7 @@ enum IPodColorTheme: CaseIterable {
 
     var screenBackground: UIColor {
         switch self {
-        case .darkPod:     return UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 0.92)
+        case .darkPod:     return UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 0.94)
         case .sepiaPod:    return UIColor(red: 0.96, green: 0.92, blue: 0.83, alpha: 0.96)
         case .classicBlue: return UIColor(red: 0.96, green: 0.97, blue: 0.99, alpha: 0.96)
         }
@@ -70,7 +70,7 @@ class IPodMenuCell: UITableViewCell {
         backgroundColor = .clear
 
         highlightGradient.isHidden = true
-        highlightGradient.cornerRadius = 5
+        highlightGradient.cornerRadius = 4
         contentView.layer.insertSublayer(highlightGradient, at: 0)
 
         titleLabel.font = UIFont.systemFont(ofSize: 15, weight: .semibold)
@@ -186,7 +186,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     var onSeekRatioChanged: ((Double) -> Void)?
     var onActiveCoverImageChanged: ((UIImage?) -> Void)?
 
-    // Modern Seamless Status Bar (Menyatu dengan LCD, ikon Play & Baterai putih)
+    // Modern Seamless Status Bar
     private let headerBar = UIView()
     private let headerSubtleTint = CAGradientLayer()
     private let headerTitleLabel = UILabel()
@@ -205,6 +205,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     // Horizontal Cover Flow View
     private let coverFlowContainer = UIView()
     private var coverCollectionView: UICollectionView!
+    private let coverCaptionStack = UIStackView()
     private let coverTitleLabel = UILabel()
     private let coverArtistLabel = UILabel()
     private var coverTracks: [IPodTrack] = []
@@ -214,13 +215,14 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private var displayLink: CADisplayLink?
     private var targetCoverOffsetX: CGFloat = 0
 
-    // Now Playing View
+    // Now Playing View (Sesuai Referensi Gambar: Sampul + Refleksi Cermin, Judul, Artis, "8 / 18", & Garis Durasi Tipis dengan Knob Bulat)
     private let nowPlayingContainer = UIView()
-    private let trackIndexLabel = UILabel()
     private let artworkView = UIImageView()
+    private let artworkReflectionView = UIImageView()
+    private let artworkReflectionMask = CAGradientLayer()
     private let trackTitleLabel = UILabel()
     private let trackArtistLabel = UILabel()
-    private let trackAlbumLabel = UILabel()
+    private let trackIndexLabel = UILabel()
     private let progressTouchArea = UIView()
     private let progressTrack = UIView()
     private let progressFill = UIView()
@@ -233,7 +235,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        layer.cornerRadius = 12
+        // Sudut LCD dibuat lebih lancip
+        layer.cornerRadius = 6
         layer.borderWidth = 1.5
         layer.borderColor = UIColor(white: 0.26, alpha: 0.85).cgColor
         clipsToBounds = true
@@ -245,7 +248,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     required init?(coder: NSCoder) { fatalError() }
 
     private func setupUI() {
-        // Status bar menyatu langsung dengan background layar tanpa sekat garis kasar
         headerBar.backgroundColor = .clear
         headerBar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(headerBar)
@@ -271,7 +273,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         playStateIcon.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(playStateIcon)
 
-        // Ikon baterai modern kapsul membulat
         batteryView.layer.borderWidth = 1.2
         batteryView.layer.cornerRadius = 3.5
         batteryView.translatesAutoresizingMaskIntoConstraints = false
@@ -316,28 +317,31 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverCollectionView.translatesAutoresizingMaskIntoConstraints = false
         coverFlowContainer.addSubview(coverCollectionView)
 
+        // Judul & Artis berada tepat di tengah antara batas bawah sampul Cover Flow dan batas bawah LCD
+        let bottomCaptionGuide = UILayoutGuide()
+        coverFlowContainer.addLayoutGuide(bottomCaptionGuide)
+
+        coverCaptionStack.axis = .vertical
+        coverCaptionStack.alignment = .center
+        coverCaptionStack.spacing = 2
+        coverCaptionStack.isUserInteractionEnabled = false
+        coverCaptionStack.translatesAutoresizingMaskIntoConstraints = false
+        coverFlowContainer.addSubview(coverCaptionStack)
+
         coverTitleLabel.font = UIFont.systemFont(ofSize: 14, weight: .bold)
         coverTitleLabel.textAlignment = .center
         coverTitleLabel.lineBreakMode = .byTruncatingTail
-        coverTitleLabel.isUserInteractionEnabled = false
-        coverTitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        coverFlowContainer.addSubview(coverTitleLabel)
+        coverCaptionStack.addArrangedSubview(coverTitleLabel)
 
         coverArtistLabel.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
         coverArtistLabel.textAlignment = .center
         coverArtistLabel.lineBreakMode = .byTruncatingTail
-        coverArtistLabel.isUserInteractionEnabled = false
-        coverArtistLabel.translatesAutoresizingMaskIntoConstraints = false
-        coverFlowContainer.addSubview(coverArtistLabel)
+        coverCaptionStack.addArrangedSubview(coverArtistLabel)
 
         // Now Playing Container
         nowPlayingContainer.isHidden = true
         nowPlayingContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(nowPlayingContainer)
-
-        trackIndexLabel.font = UIFont.systemFont(ofSize: 11, weight: .semibold)
-        trackIndexLabel.translatesAutoresizingMaskIntoConstraints = false
-        nowPlayingContainer.addSubview(trackIndexLabel)
 
         artworkView.contentMode = .scaleAspectFill
         artworkView.clipsToBounds = true
@@ -347,47 +351,37 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         artworkView.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(artworkView)
 
-        trackTitleLabel.font = UIFont.systemFont(ofSize: 14, weight: .bold)
+        // Efek cermin di bawah sampul pada halaman Now Playing
+        artworkReflectionView.contentMode = .scaleAspectFill
+        artworkReflectionView.clipsToBounds = true
+        artworkReflectionView.alpha = 0.30
+        artworkReflectionView.transform = CGAffineTransform(scaleX: 1.0, y: -1.0)
+        artworkReflectionView.translatesAutoresizingMaskIntoConstraints = false
+        nowPlayingContainer.addSubview(artworkReflectionView)
+
+        artworkReflectionMask.colors = [
+            UIColor.clear.cgColor,
+            UIColor(white: 1.0, alpha: 0.45).cgColor,
+            UIColor.white.cgColor
+        ]
+        artworkReflectionMask.locations = [0.05, 0.55, 1.0]
+        artworkReflectionView.layer.mask = artworkReflectionMask
+
+        trackTitleLabel.font = UIFont.systemFont(ofSize: 15, weight: .bold)
         trackTitleLabel.numberOfLines = 2
         trackTitleLabel.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(trackTitleLabel)
 
-        trackArtistLabel.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
+        trackArtistLabel.font = UIFont.systemFont(ofSize: 12.5, weight: .medium)
         trackArtistLabel.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(trackArtistLabel)
 
-        trackAlbumLabel.font = UIFont.systemFont(ofSize: 11, weight: .regular)
-        trackAlbumLabel.translatesAutoresizingMaskIntoConstraints = false
-        nowPlayingContainer.addSubview(trackAlbumLabel)
+        // Indeks lagu (misal: "8 / 18") berada tepat di bawah artis (nama album dihilangkan)
+        trackIndexLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        trackIndexLabel.translatesAutoresizingMaskIntoConstraints = false
+        nowPlayingContainer.addSubview(trackIndexLabel)
 
-        progressTouchArea.backgroundColor = .clear
-        progressTouchArea.isUserInteractionEnabled = true
-        progressTouchArea.translatesAutoresizingMaskIntoConstraints = false
-        let panSeek = UIPanGestureRecognizer(target: self, action: #selector(handleProgressScrub(_:)))
-        let tapSeek = UITapGestureRecognizer(target: self, action: #selector(handleProgressTap(_:)))
-        progressTouchArea.addGestureRecognizer(panSeek)
-        progressTouchArea.addGestureRecognizer(tapSeek)
-        nowPlayingContainer.addSubview(progressTouchArea)
-
-        progressTrack.layer.cornerRadius = 4.5
-        progressTrack.layer.borderWidth = 0.8
-        progressTrack.clipsToBounds = true
-        progressTrack.isUserInteractionEnabled = false
-        progressTrack.translatesAutoresizingMaskIntoConstraints = false
-        progressTouchArea.addSubview(progressTrack)
-
-        progressFill.translatesAutoresizingMaskIntoConstraints = false
-        progressTrack.addSubview(progressFill)
-        progressWidthConstraint = progressFill.widthAnchor.constraint(equalToConstant: 0)
-
-        progressKnob.backgroundColor = .white
-        progressKnob.layer.cornerRadius = 6
-        progressKnob.layer.borderWidth = 1.2
-        progressKnob.layer.borderColor = UIColor(white: 0.35, alpha: 1.0).cgColor
-        progressKnob.isUserInteractionEnabled = false
-        progressKnob.translatesAutoresizingMaskIntoConstraints = false
-        progressTouchArea.addSubview(progressKnob)
-
+        // Baris durasi ramping modern: waktu kiri, garis horizontal + lingkaran knob, sisa waktu kanan
         elapsedLabel.text = "0:00"
         elapsedLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
         elapsedLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -398,6 +392,35 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         remainingLabel.textAlignment = .right
         remainingLabel.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(remainingLabel)
+
+        progressTouchArea.backgroundColor = .clear
+        progressTouchArea.isUserInteractionEnabled = true
+        progressTouchArea.translatesAutoresizingMaskIntoConstraints = false
+        let panSeek = UIPanGestureRecognizer(target: self, action: #selector(handleProgressScrub(_:)))
+        let tapSeek = UITapGestureRecognizer(target: self, action: #selector(handleProgressTap(_:)))
+        progressTouchArea.addGestureRecognizer(panSeek)
+        progressTouchArea.addGestureRecognizer(tapSeek)
+        nowPlayingContainer.addSubview(progressTouchArea)
+
+        progressTrack.layer.cornerRadius = 1.5
+        progressTrack.isUserInteractionEnabled = false
+        progressTrack.translatesAutoresizingMaskIntoConstraints = false
+        progressTouchArea.addSubview(progressTrack)
+
+        progressFill.layer.cornerRadius = 1.5
+        progressFill.translatesAutoresizingMaskIntoConstraints = false
+        progressTrack.addSubview(progressFill)
+        progressWidthConstraint = progressFill.widthAnchor.constraint(equalToConstant: 0)
+
+        progressKnob.backgroundColor = .white
+        progressKnob.layer.cornerRadius = 5.0
+        progressKnob.layer.shadowColor = UIColor.black.cgColor
+        progressKnob.layer.shadowOpacity = 0.35
+        progressKnob.layer.shadowOffset = CGSize(width: 0, height: 1)
+        progressKnob.layer.shadowRadius = 2
+        progressKnob.isUserInteractionEnabled = false
+        progressKnob.translatesAutoresizingMaskIntoConstraints = false
+        progressTouchArea.addSubview(progressKnob)
 
         UIDevice.current.isBatteryMonitoringEnabled = true
         let level = UIDevice.current.batteryLevel
@@ -451,48 +474,62 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             coverCollectionView.trailingAnchor.constraint(equalTo: coverFlowContainer.trailingAnchor),
             coverCollectionView.bottomAnchor.constraint(equalTo: coverFlowContainer.bottomAnchor),
 
-            coverArtistLabel.bottomAnchor.constraint(equalTo: coverFlowContainer.bottomAnchor, constant: -16),
-            coverArtistLabel.leadingAnchor.constraint(equalTo: coverFlowContainer.leadingAnchor, constant: 14),
-            coverArtistLabel.trailingAnchor.constraint(equalTo: coverFlowContainer.trailingAnchor, constant: -14),
+            // Ruang tepat di antara batas bawah sampul utama (4 + 6 + 100 = 110pt) dan batas bawah LCD
+            bottomCaptionGuide.topAnchor.constraint(equalTo: coverFlowContainer.topAnchor, constant: 112),
+            bottomCaptionGuide.bottomAnchor.constraint(equalTo: coverFlowContainer.bottomAnchor),
+            bottomCaptionGuide.leadingAnchor.constraint(equalTo: coverFlowContainer.leadingAnchor, constant: 14),
+            bottomCaptionGuide.trailingAnchor.constraint(equalTo: coverFlowContainer.trailingAnchor, constant: -14),
 
-            coverTitleLabel.bottomAnchor.constraint(equalTo: coverArtistLabel.topAnchor, constant: -2),
-            coverTitleLabel.leadingAnchor.constraint(equalTo: coverArtistLabel.leadingAnchor),
-            coverTitleLabel.trailingAnchor.constraint(equalTo: coverArtistLabel.trailingAnchor),
+            coverCaptionStack.centerXAnchor.constraint(equalTo: bottomCaptionGuide.centerXAnchor),
+            coverCaptionStack.centerYAnchor.constraint(equalTo: bottomCaptionGuide.centerYAnchor),
+            coverCaptionStack.leadingAnchor.constraint(greaterThanOrEqualTo: bottomCaptionGuide.leadingAnchor),
+            coverCaptionStack.trailingAnchor.constraint(lessThanOrEqualTo: bottomCaptionGuide.trailingAnchor),
 
             nowPlayingContainer.topAnchor.constraint(equalTo: headerBar.bottomAnchor),
             nowPlayingContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
             nowPlayingContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
             nowPlayingContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            trackIndexLabel.topAnchor.constraint(equalTo: nowPlayingContainer.topAnchor, constant: 6),
-            trackIndexLabel.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 12),
-
-            artworkView.topAnchor.constraint(equalTo: trackIndexLabel.bottomAnchor, constant: 8),
-            artworkView.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 12),
+            artworkView.topAnchor.constraint(equalTo: nowPlayingContainer.topAnchor, constant: 12),
+            artworkView.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 14),
             artworkView.widthAnchor.constraint(equalToConstant: 100),
             artworkView.heightAnchor.constraint(equalToConstant: 100),
 
-            trackTitleLabel.topAnchor.constraint(equalTo: artworkView.topAnchor, constant: 4),
-            trackTitleLabel.leadingAnchor.constraint(equalTo: artworkView.trailingAnchor, constant: 10),
-            trackTitleLabel.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -10),
+            artworkReflectionView.topAnchor.constraint(equalTo: artworkView.bottomAnchor, constant: 1),
+            artworkReflectionView.centerXAnchor.constraint(equalTo: artworkView.centerXAnchor),
+            artworkReflectionView.widthAnchor.constraint(equalToConstant: 100),
+            artworkReflectionView.heightAnchor.constraint(equalToConstant: 44),
 
-            trackArtistLabel.topAnchor.constraint(equalTo: trackTitleLabel.bottomAnchor, constant: 6),
+            trackTitleLabel.topAnchor.constraint(equalTo: artworkView.topAnchor, constant: 8),
+            trackTitleLabel.leadingAnchor.constraint(equalTo: artworkView.trailingAnchor, constant: 12),
+            trackTitleLabel.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -12),
+
+            trackArtistLabel.topAnchor.constraint(equalTo: trackTitleLabel.bottomAnchor, constant: 4),
             trackArtistLabel.leadingAnchor.constraint(equalTo: trackTitleLabel.leadingAnchor),
             trackArtistLabel.trailingAnchor.constraint(equalTo: trackTitleLabel.trailingAnchor),
 
-            trackAlbumLabel.topAnchor.constraint(equalTo: trackArtistLabel.bottomAnchor, constant: 4),
-            trackAlbumLabel.leadingAnchor.constraint(equalTo: trackTitleLabel.leadingAnchor),
-            trackAlbumLabel.trailingAnchor.constraint(equalTo: trackTitleLabel.trailingAnchor),
+            trackIndexLabel.topAnchor.constraint(equalTo: trackArtistLabel.bottomAnchor, constant: 8),
+            trackIndexLabel.leadingAnchor.constraint(equalTo: trackTitleLabel.leadingAnchor),
+            trackIndexLabel.trailingAnchor.constraint(equalTo: trackTitleLabel.trailingAnchor),
 
-            progressTouchArea.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 12),
-            progressTouchArea.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -12),
-            progressTouchArea.bottomAnchor.constraint(equalTo: elapsedLabel.topAnchor, constant: -2),
+            // Baris durasi horizontal sejajar dengan label waktu kiri dan sisa waktu kanan
+            elapsedLabel.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 14),
+            elapsedLabel.bottomAnchor.constraint(equalTo: nowPlayingContainer.bottomAnchor, constant: -12),
+            elapsedLabel.widthAnchor.constraint(equalToConstant: 36),
+
+            remainingLabel.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -14),
+            remainingLabel.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
+            remainingLabel.widthAnchor.constraint(equalToConstant: 40),
+
+            progressTouchArea.leadingAnchor.constraint(equalTo: elapsedLabel.trailingAnchor, constant: 6),
+            progressTouchArea.trailingAnchor.constraint(equalTo: remainingLabel.leadingAnchor, constant: -6),
+            progressTouchArea.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
             progressTouchArea.heightAnchor.constraint(equalToConstant: 24),
 
             progressTrack.leadingAnchor.constraint(equalTo: progressTouchArea.leadingAnchor),
             progressTrack.trailingAnchor.constraint(equalTo: progressTouchArea.trailingAnchor),
             progressTrack.centerYAnchor.constraint(equalTo: progressTouchArea.centerYAnchor),
-            progressTrack.heightAnchor.constraint(equalToConstant: 9),
+            progressTrack.heightAnchor.constraint(equalToConstant: 2.5),
 
             progressFill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
             progressFill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
@@ -501,14 +538,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
             progressKnob.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             progressKnob.centerXAnchor.constraint(equalTo: progressFill.trailingAnchor),
-            progressKnob.widthAnchor.constraint(equalToConstant: 12),
-            progressKnob.heightAnchor.constraint(equalToConstant: 12),
-
-            elapsedLabel.leadingAnchor.constraint(equalTo: progressTouchArea.leadingAnchor),
-            elapsedLabel.bottomAnchor.constraint(equalTo: nowPlayingContainer.bottomAnchor, constant: -8),
-
-            remainingLabel.trailingAnchor.constraint(equalTo: progressTouchArea.trailingAnchor),
-            remainingLabel.bottomAnchor.constraint(equalTo: nowPlayingContainer.bottomAnchor, constant: -8)
+            progressKnob.widthAnchor.constraint(equalToConstant: 10),
+            progressKnob.heightAnchor.constraint(equalToConstant: 10)
         ])
     }
 
@@ -528,6 +559,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     override func layoutSubviews() {
         super.layoutSubviews()
         headerSubtleTint.frame = headerBar.bounds
+        artworkReflectionMask.frame = artworkReflectionView.bounds
         if let layout = coverCollectionView.collectionViewLayout as? UICollectionViewFlowLayout {
             let sideInset = max(0, (bounds.width - layout.itemSize.width) / 2.0)
             layout.sectionInset = UIEdgeInsets(top: 0, left: sideInset, bottom: 0, right: sideInset)
@@ -543,7 +575,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         if theme == .darkPod {
             headerSubtleTint.colors = [UIColor(white: 1.0, alpha: 0.06).cgColor, UIColor.clear.cgColor]
             layer.borderColor = UIColor(white: 0.28, alpha: 0.85).cgColor
-            // Ikon play & baterai berwarna putih bersih
             playStateIcon.textColor = .white
             batteryView.layer.borderColor = UIColor(white: 0.90, alpha: 1.0).cgColor
             batteryCapView.backgroundColor = UIColor(white: 0.90, alpha: 1.0)
@@ -562,12 +593,11 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         trackIndexLabel.textColor = theme.secondaryText
         trackTitleLabel.textColor = theme.primaryText
         trackArtistLabel.textColor = theme.secondaryText
-        trackAlbumLabel.textColor = theme.secondaryText
-        elapsedLabel.textColor = theme.primaryText
-        remainingLabel.textColor = theme.primaryText
-        progressTrack.backgroundColor = theme == .darkPod ? UIColor(white: 0.24, alpha: 1.0) : UIColor(white: 0.80, alpha: 1.0)
-        progressTrack.layer.borderColor = (theme == .darkPod ? UIColor(white: 0.38, alpha: 1.0) : UIColor(white: 0.58, alpha: 1.0)).cgColor
+        elapsedLabel.textColor = theme.secondaryText
+        remainingLabel.textColor = theme.secondaryText
+        progressTrack.backgroundColor = theme == .darkPod ? UIColor(white: 0.28, alpha: 1.0) : UIColor(white: 0.78, alpha: 1.0)
         progressFill.backgroundColor = theme == .darkPod ? .white : theme.highlightTop
+        progressKnob.backgroundColor = theme == .darkPod ? .white : theme.highlightBottom
         tableView.reloadData()
         coverCollectionView.reloadData()
     }
@@ -678,8 +708,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             let centerCell = coverCollectionView.cellForItem(at: centerIndexPath)
             centerCell?.alpha = 0.0
             coverCollectionView.alpha = 0.0
-            coverTitleLabel.alpha = 0.0
-            coverArtistLabel.alpha = 0.0
+            coverCaptionStack.alpha = 0.0
 
             UIView.animate(
                 withDuration: 0.30,
@@ -688,8 +717,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                 animations: {
                     flyingCover.frame = exactTargetFrame
                     self.coverCollectionView.alpha = 1.0
-                    self.coverTitleLabel.alpha = 1.0
-                    self.coverArtistLabel.alpha = 1.0
+                    self.coverCaptionStack.alpha = 1.0
                 },
                 completion: { _ in
                     centerCell?.alpha = 1.0
@@ -835,13 +863,13 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         isCoverFlowActive = false
         nowPlayingContainer.isHidden = false
 
-        trackIndexLabel.text = "\(index + 1) of \(total)"
         trackTitleLabel.text = track.title
         trackArtistLabel.text = track.artist
-        trackAlbumLabel.text = track.album
+        trackIndexLabel.text = "\(index + 1) / \(total)"
 
         let nextImage = track.artworkImage ?? makeDefaultNoteArtwork()
         artworkView.image = nextImage
+        artworkReflectionView.image = nextImage
         onActiveCoverImageChanged?(track.artworkImage)
 
         if animateFromCoverFlow && wasCoverFlow {
@@ -857,10 +885,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             addSubview(flyingCover)
 
             artworkView.alpha = 0.0
+            artworkReflectionView.alpha = 0.0
             trackIndexLabel.alpha = 0.0
             trackTitleLabel.alpha = 0.0
             trackArtistLabel.alpha = 0.0
-            trackAlbumLabel.alpha = 0.0
             progressTouchArea.alpha = 0.0
             elapsedLabel.alpha = 0.0
             remainingLabel.alpha = 0.0
@@ -871,10 +899,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                 options: [.curveEaseOut],
                 animations: {
                     flyingCover.frame = exactTargetFrame
+                    self.artworkReflectionView.alpha = 0.30
                     self.trackIndexLabel.alpha = 1.0
                     self.trackTitleLabel.alpha = 1.0
                     self.trackArtistLabel.alpha = 1.0
-                    self.trackAlbumLabel.alpha = 1.0
                     self.progressTouchArea.alpha = 1.0
                     self.elapsedLabel.alpha = 1.0
                     self.remainingLabel.alpha = 1.0
@@ -898,14 +926,17 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
             artworkView.layer.transform = startTransform
             artworkView.alpha = 0.55
+            artworkReflectionView.alpha = 0.0
 
             UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0.4, options: [.curveEaseOut], animations: {
                 self.artworkView.layer.transform = CATransform3DIdentity
                 self.artworkView.alpha = 1.0
+                self.artworkReflectionView.alpha = 0.30
             })
         } else {
             artworkView.layer.transform = CATransform3DIdentity
             artworkView.alpha = 1.0
+            artworkReflectionView.alpha = 0.30
         }
 
         lastDisplayedTrackId = track.id

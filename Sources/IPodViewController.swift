@@ -73,18 +73,17 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func setupBodyAndLayout() {
         view.layer.insertSublayer(bodyGradient, at: 0)
 
-        // Efek cahaya ambient di belakang LCD yang berubah mengikuti warna sampul lagu
-        ambientGlowView.backgroundColor = UIColor(red: 0.25, green: 0.50, blue: 0.90, alpha: 0.42)
-        ambientGlowView.layer.cornerRadius = 24
+        // Cahaya ambient hanya muncul melebar di bagian bawah LCD
+        ambientGlowView.backgroundColor = UIColor(red: 0.25, green: 0.50, blue: 0.90, alpha: 0.45)
+        ambientGlowView.layer.cornerRadius = 18
         ambientGlowView.layer.shadowColor = UIColor(red: 0.25, green: 0.50, blue: 0.90, alpha: 1.0).cgColor
-        ambientGlowView.layer.shadowOpacity = 0.75
-        ambientGlowView.layer.shadowOffset = .zero
-        ambientGlowView.layer.shadowRadius = 24
+        ambientGlowView.layer.shadowOpacity = 0.85
+        ambientGlowView.layer.shadowOffset = CGSize(width: 0, height: 8)
+        ambientGlowView.layer.shadowRadius = 22
         ambientGlowView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(ambientGlowView)
 
-        // Bingkai kaca frosted glass halus di belakang LCD
-        glassFrameView.layer.cornerRadius = 15
+        glassFrameView.layer.cornerRadius = 8
         glassFrameView.clipsToBounds = true
         glassFrameView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(glassFrameView)
@@ -95,34 +94,27 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         clickWheel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(clickWheel)
 
-        let bottomAreaGuide = UILayoutGuide()
-        view.addLayoutGuide(bottomAreaGuide)
-
         NSLayoutConstraint.activate([
-            // Sedikit turunkan posisi LCD dari tepi atas
-            screenView.topAnchor.constraint(equalTo: view.topAnchor, constant: 22),
+            // LCD digeser sedikit ke atas tanpa menggeser posisi Click Wheel
+            screenView.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
             screenView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
-            glassFrameView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -4),
-            glassFrameView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor, constant: 4),
-            glassFrameView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor, constant: -4),
-            glassFrameView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor, constant: 4),
+            glassFrameView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -3),
+            glassFrameView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor, constant: 3),
+            glassFrameView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor, constant: -3),
+            glassFrameView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor, constant: 3),
 
-            ambientGlowView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: 4),
-            ambientGlowView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor, constant: -4),
-            ambientGlowView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor, constant: 4),
-            ambientGlowView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor, constant: -4),
+            // Pendaran cahaya hanya berada melebar di bawah tepi bawah LCD
+            ambientGlowView.topAnchor.constraint(equalTo: screenView.bottomAnchor, constant: -16),
+            ambientGlowView.heightAnchor.constraint(equalToConstant: 24),
+            ambientGlowView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor, constant: 8),
+            ambientGlowView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor, constant: -8),
 
-            // Area bawah LCD hingga tepi bawah sehingga posisi Click Wheel ikut turun secara seimbang
-            bottomAreaGuide.topAnchor.constraint(equalTo: screenView.bottomAnchor),
-            bottomAreaGuide.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6),
-            bottomAreaGuide.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            bottomAreaGuide.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-
-            clickWheel.centerXAnchor.constraint(equalTo: bottomAreaGuide.centerXAnchor),
-            clickWheel.centerYAnchor.constraint(equalTo: bottomAreaGuide.centerYAnchor),
+            // Posisi Click Wheel tetap dikunci terhadap tepi bawah agar tidak ikut naik
+            clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -34),
+            clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.71),
             clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor)
         ])
@@ -165,7 +157,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             : UIColor(red: 0.62, green: 0.42, blue: 0.22, alpha: 1.0))
 
         UIView.animate(withDuration: 0.45) {
-            self.ambientGlowView.backgroundColor = glowColor.withAlphaComponent(0.42)
+            self.ambientGlowView.backgroundColor = glowColor.withAlphaComponent(0.45)
             self.ambientGlowView.layer.shadowColor = glowColor.cgColor
         }
     }

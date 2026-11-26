@@ -16,9 +16,9 @@ class ClickWheelView: UIView {
     private let wheelLayer = CAShapeLayer()
     private let centerButton = UIButton(type: .custom)
     private let menuLabel = UILabel()
-    private let nextLabel = UILabel()
-    private let prevLabel = UILabel()
-    private let playPauseLabel = UILabel()
+    private let nextIconView = UIImageView()
+    private let prevIconView = UIImageView()
+    private let playPauseIconView = UIImageView()
 
     private var lastAngle: CGFloat?
     private var accumulatedAngle: CGFloat = 0
@@ -43,24 +43,21 @@ class ClickWheelView: UIView {
         layer.addSublayer(wheelLayer)
 
         menuLabel.text = "MENU"
-        menuLabel.font = UIFont.systemFont(ofSize: 13, weight: .bold)
+        menuLabel.font = UIFont.systemFont(ofSize: 13.5, weight: .heavy)
         menuLabel.textAlignment = .center
         addSubview(menuLabel)
 
-        nextLabel.text = "▶▶|"
-        nextLabel.font = UIFont.systemFont(ofSize: 12, weight: .bold)
-        nextLabel.textAlignment = .center
-        addSubview(nextLabel)
+        nextIconView.image = makeNextIcon(size: CGSize(width: 24, height: 14))
+        nextIconView.contentMode = .scaleAspectFit
+        addSubview(nextIconView)
 
-        prevLabel.text = "|◀◀"
-        prevLabel.font = UIFont.systemFont(ofSize: 12, weight: .bold)
-        prevLabel.textAlignment = .center
-        addSubview(prevLabel)
+        prevIconView.image = makePrevIcon(size: CGSize(width: 24, height: 14))
+        prevIconView.contentMode = .scaleAspectFit
+        addSubview(prevIconView)
 
-        playPauseLabel.text = "▶❚❚"
-        playPauseLabel.font = UIFont.systemFont(ofSize: 12, weight: .bold)
-        playPauseLabel.textAlignment = .center
-        addSubview(playPauseLabel)
+        playPauseIconView.image = makePlayPauseIcon(size: CGSize(width: 26, height: 14))
+        playPauseIconView.contentMode = .scaleAspectFit
+        addSubview(playPauseIconView)
 
         centerButton.layer.borderWidth = 1.0
         centerButton.addTarget(self, action: #selector(didTapCenter), for: .touchUpInside)
@@ -68,40 +65,101 @@ class ClickWheelView: UIView {
     }
 
     func applyTheme(_ theme: IPodColorTheme) {
+        let iconTint: UIColor
         switch theme {
         case .darkPod:
             wheelLayer.fillColor = UIColor(red: 0.14, green: 0.14, blue: 0.16, alpha: 1.0).cgColor
             wheelLayer.strokeColor = UIColor(white: 0.24, alpha: 1.0).cgColor
             centerButton.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0)
             centerButton.layer.borderColor = UIColor(white: 0.22, alpha: 1.0).cgColor
-            let textCol = UIColor(white: 0.78, alpha: 1.0)
-            menuLabel.textColor = textCol
-            nextLabel.textColor = textCol
-            prevLabel.textColor = textCol
-            playPauseLabel.textColor = textCol
+            iconTint = UIColor(white: 0.90, alpha: 1.0)
 
         case .sepiaPod:
             wheelLayer.fillColor = UIColor(red: 0.96, green: 0.93, blue: 0.87, alpha: 1.0).cgColor
             wheelLayer.strokeColor = UIColor(red: 0.80, green: 0.74, blue: 0.64, alpha: 1.0).cgColor
             centerButton.backgroundColor = UIColor(red: 0.86, green: 0.80, blue: 0.70, alpha: 1.0)
             centerButton.layer.borderColor = UIColor(red: 0.75, green: 0.68, blue: 0.58, alpha: 1.0).cgColor
-            let textCol = UIColor(red: 0.42, green: 0.33, blue: 0.23, alpha: 1.0)
-            menuLabel.textColor = textCol
-            nextLabel.textColor = textCol
-            prevLabel.textColor = textCol
-            playPauseLabel.textColor = textCol
+            iconTint = UIColor(red: 0.34, green: 0.25, blue: 0.16, alpha: 1.0)
 
         case .classicBlue:
             wheelLayer.fillColor = UIColor(white: 0.96, alpha: 1.0).cgColor
             wheelLayer.strokeColor = UIColor(white: 0.78, alpha: 1.0).cgColor
             centerButton.backgroundColor = UIColor(white: 0.84, alpha: 1.0)
             centerButton.layer.borderColor = UIColor(white: 0.74, alpha: 1.0).cgColor
-            let textCol = UIColor(white: 0.45, alpha: 1.0)
-            menuLabel.textColor = textCol
-            nextLabel.textColor = textCol
-            prevLabel.textColor = textCol
-            playPauseLabel.textColor = textCol
+            iconTint = UIColor(white: 0.32, alpha: 1.0)
         }
+
+        menuLabel.textColor = iconTint
+        nextIconView.tintColor = iconTint
+        prevIconView.tintColor = iconTint
+        playPauseIconView.tintColor = iconTint
+    }
+
+    private func makeNextIcon(size: CGSize) -> UIImage? {
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
+        ctx.setFillColor(UIColor.white.cgColor)
+        let h = size.height
+        // Segitiga 1
+        ctx.move(to: CGPoint(x: 2, y: 1))
+        ctx.addLine(to: CGPoint(x: 11, y: h / 2))
+        ctx.addLine(to: CGPoint(x: 2, y: h - 1))
+        ctx.closePath()
+        ctx.fillPath()
+        // Segitiga 2
+        ctx.move(to: CGPoint(x: 11, y: 1))
+        ctx.addLine(to: CGPoint(x: 20, y: h / 2))
+        ctx.addLine(to: CGPoint(x: 11, y: h - 1))
+        ctx.closePath()
+        ctx.fillPath()
+        // Batang tegak tebal di kanan
+        ctx.fill(CGRect(x: 20.5, y: 1, width: 2.8, height: h - 2))
+        let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
+        UIGraphicsEndImageContext()
+        return img
+    }
+
+    private func makePrevIcon(size: CGSize) -> UIImage? {
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
+        ctx.setFillColor(UIColor.white.cgColor)
+        let h = size.height
+        // Batang tegak tebal di kiri
+        ctx.fill(CGRect(x: 0.7, y: 1, width: 2.8, height: h - 2))
+        // Segitiga 1
+        ctx.move(to: CGPoint(x: 13, y: 1))
+        ctx.addLine(to: CGPoint(x: 4, y: h / 2))
+        ctx.addLine(to: CGPoint(x: 13, y: h - 1))
+        ctx.closePath()
+        ctx.fillPath()
+        // Segitiga 2
+        ctx.move(to: CGPoint(x: 22, y: 1))
+        ctx.addLine(to: CGPoint(x: 13, y: h / 2))
+        ctx.addLine(to: CGPoint(x: 22, y: h - 1))
+        ctx.closePath()
+        ctx.fillPath()
+        let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
+        UIGraphicsEndImageContext()
+        return img
+    }
+
+    private func makePlayPauseIcon(size: CGSize) -> UIImage? {
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
+        ctx.setFillColor(UIColor.white.cgColor)
+        let h = size.height
+        // Segitiga Play tebal
+        ctx.move(to: CGPoint(x: 2, y: 1))
+        ctx.addLine(to: CGPoint(x: 12.5, y: h / 2))
+        ctx.addLine(to: CGPoint(x: 2, y: h - 1))
+        ctx.closePath()
+        ctx.fillPath()
+        // Dua batang Pause tebal
+        ctx.fill(CGRect(x: 15.5, y: 1, width: 3.2, height: h - 2))
+        ctx.fill(CGRect(x: 20.8, y: 1, width: 3.2, height: h - 2))
+        let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
+        UIGraphicsEndImageContext()
+        return img
     }
 
     override func layoutSubviews() {
@@ -126,9 +184,9 @@ class ClickWheelView: UIView {
 
         let inset = side * 0.14
         menuLabel.frame = CGRect(x: (bounds.width - 70) / 2.0, y: wheelRect.minY + inset - 6, width: 70, height: 20)
-        playPauseLabel.frame = CGRect(x: (bounds.width - 70) / 2.0, y: wheelRect.maxY - inset - 14, width: 70, height: 20)
-        prevLabel.frame = CGRect(x: wheelRect.minX + inset - 10, y: (bounds.height - 20) / 2.0, width: 44, height: 20)
-        nextLabel.frame = CGRect(x: wheelRect.maxX - inset - 34, y: (bounds.height - 20) / 2.0, width: 44, height: 20)
+        playPauseIconView.frame = CGRect(x: (bounds.width - 26) / 2.0, y: wheelRect.maxY - inset - 11, width: 26, height: 14)
+        prevIconView.frame = CGRect(x: wheelRect.minX + inset - 2, y: (bounds.height - 14) / 2.0, width: 24, height: 14)
+        nextIconView.frame = CGRect(x: wheelRect.maxX - inset - 22, y: (bounds.height - 14) / 2.0, width: 24, height: 14)
     }
 
     @objc private func didTapCenter() {
