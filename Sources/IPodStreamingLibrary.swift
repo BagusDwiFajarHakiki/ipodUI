@@ -154,7 +154,6 @@ final class IPodStreamingLibrary {
                 return
             }
 
-            // Fallback ekstraksi dari halaman watch mobile jika terkena blokir / LOGIN_REQUIRED / 403
             self?.resolveFromMobileWatchPage(videoId: videoId) { watchStreamURL in
                 if let wURL = watchStreamURL {
                     self?.resolvedStreamURLCache[track.id] = wURL
@@ -521,12 +520,27 @@ final class IPodStreamingLibrary {
         }.resume()
     }
 
+    private func replaceTrackArtwork(at index: Int, expectedId: String, image: UIImage) {
+        guard allStreamingTracks.indices.contains(index),
+              allStreamingTracks[index].id == expectedId else { return }
+        let old = allStreamingTracks[index]
+        allStreamingTracks[index] = makeTrack(
+            id: old.id,
+            title: old.title,
+            artist: old.artist,
+            album: old.album,
+            duration: old.duration,
+            assetURL: old.assetURL,
+            artworkImage: image
+        )
+    }
+
     private func loadLowResThumbnailsAsync(for tracks: [IPodTrack]) {
         for (idx, track) in tracks.enumerated() {
             guard let thumbStr = thumbnailURLByTrackId[track.id],
                   let url = URL(string: thumbStr) else { continue }
             if let cached = artworkCache[thumbStr] {
-                allStreamingTracks[idx].artworkImage = cached
+                replaceTrackArtwork(at: idx, expectedId: track.id, image: cached)
                 continue
             }
             URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
@@ -534,10 +548,7 @@ final class IPodStreamingLibrary {
                 let lowRes = self.downsampleImage(rawImg, targetSide: 96)
                 self.artworkCache[thumbStr] = lowRes
                 DispatchQueue.main.async {
-                    if self.allStreamingTracks.indices.contains(idx),
-                       self.allStreamingTracks[idx].id == track.id {
-                        self.allStreamingTracks[idx].artworkImage = lowRes
-                    }
+                    self.replaceTrackArtwork(at: idx, expectedId: track.id, image: lowRes)
                 }
             }.resume()
         }
