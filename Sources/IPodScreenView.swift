@@ -339,8 +339,14 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let progressKnob = UIView()
     private let elapsedLabel = UILabel()
     private let remainingLabel = UILabel()
+    private let volumeMuteIconView = UIImageView()
+    private let volumeFullIconView = UIImageView()
     private var progressWidthConstraint: NSLayoutConstraint!
     private var isScrubbing = false
+    private(set) var isVolumeMode = false
+    private var lastElapsed: TimeInterval = 0
+    private var lastDuration: TimeInterval = 1
+    private var currentVolumeLevel: Float = 0.5
     private var lastDisplayedTrackId: String?
 
     override init(frame: CGRect) {
@@ -524,6 +530,18 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         remainingLabel.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(remainingLabel)
 
+        volumeMuteIconView.image = makeVolumeMuteIcon(size: CGSize(width: 22, height: 14))
+        volumeMuteIconView.contentMode = .scaleAspectFit
+        volumeMuteIconView.isHidden = true
+        volumeMuteIconView.translatesAutoresizingMaskIntoConstraints = false
+        nowPlayingContainer.addSubview(volumeMuteIconView)
+
+        volumeFullIconView.image = makeVolumeFullIcon(size: CGSize(width: 24, height: 14))
+        volumeFullIconView.contentMode = .scaleAspectFit
+        volumeFullIconView.isHidden = true
+        volumeFullIconView.translatesAutoresizingMaskIntoConstraints = false
+        nowPlayingContainer.addSubview(volumeFullIconView)
+
         progressTouchArea.backgroundColor = .clear
         progressTouchArea.isUserInteractionEnabled = true
         progressTouchArea.translatesAutoresizingMaskIntoConstraints = false
@@ -566,7 +584,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         let level = UIDevice.current.batteryLevel
         let pctInt = level >= 0 ? Int(round(level * 100.0)) : 85
         let batRatio = CGFloat(min(max(Double(pctInt) / 100.0, 0.12), 1.0))
-        batteryPercentLabel.text = "\(pctInt)%"
+        batteryPercentLabel.text = "\(pctInt)"
         batteryWidthConstraint = batteryFill.widthAnchor.constraint(equalTo: batteryView.widthAnchor, multiplier: batRatio, constant: -3.2)
 
         NSLayoutConstraint.activate([
@@ -666,6 +684,16 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             remainingLabel.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
             remainingLabel.widthAnchor.constraint(equalToConstant: 40),
 
+            volumeMuteIconView.trailingAnchor.constraint(equalTo: elapsedLabel.trailingAnchor),
+            volumeMuteIconView.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
+            volumeMuteIconView.widthAnchor.constraint(equalToConstant: 22),
+            volumeMuteIconView.heightAnchor.constraint(equalToConstant: 14),
+
+            volumeFullIconView.leadingAnchor.constraint(equalTo: remainingLabel.leadingAnchor),
+            volumeFullIconView.centerYAnchor.constraint(equalTo: remainingLabel.centerYAnchor),
+            volumeFullIconView.widthAnchor.constraint(equalToConstant: 24),
+            volumeFullIconView.heightAnchor.constraint(equalToConstant: 14),
+
             progressTouchArea.leadingAnchor.constraint(equalTo: elapsedLabel.trailingAnchor, constant: 8),
             progressTouchArea.trailingAnchor.constraint(equalTo: remainingLabel.leadingAnchor, constant: -8),
             progressTouchArea.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
@@ -721,7 +749,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         let level = UIDevice.current.batteryLevel
         let pctInt = level >= 0 ? Int(round(level * 100.0)) : 85
-        batteryPercentLabel.text = "\(pctInt)%"
+        batteryPercentLabel.text = "\(pctInt)"
     }
 
     override func layoutSubviews() {
@@ -767,6 +795,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         trackArtistLabel.textColor = theme.secondaryText
         elapsedLabel.textColor = theme.secondaryText
         remainingLabel.textColor = theme.secondaryText
+        volumeMuteIconView.tintColor = theme.secondaryText
+        volumeFullIconView.tintColor = theme.secondaryText
         progressTrack.backgroundColor = theme == .darkPod ? UIColor(white: 0.28, alpha: 1.0) : UIColor(white: 0.78, alpha: 1.0)
         progressFill.backgroundColor = theme == .darkPod ? .white : theme.highlightTop
         progressKnob.backgroundColor = theme == .darkPod ? .white : theme.highlightBottom
@@ -1153,6 +1183,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             progressTouchArea.alpha = 0.0
             elapsedLabel.alpha = 0.0
             remainingLabel.alpha = 0.0
+            volumeMuteIconView.alpha = 0.0
+            volumeFullIconView.alpha = 0.0
 
             UIView.animate(
                 withDuration: 0.30,
@@ -1166,6 +1198,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                     self.progressTouchArea.alpha = 1.0
                     self.elapsedLabel.alpha = 1.0
                     self.remainingLabel.alpha = 1.0
+                    self.volumeMuteIconView.alpha = 1.0
+                    self.volumeFullIconView.alpha = 1.0
                 },
                 completion: { _ in
                     self.artworkView.alpha = 1.0
@@ -1202,8 +1236,32 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lastDisplayedTrackId = track.id
     }
 
+    func setVolumeBarMode(_ isVolume: Bool, volume: Float) {
+        isVolumeMode = isVolume
+        elapsedLabel.isHidden = isVolume
+        remainingLabel.isHidden = isVolume
+        volumeMuteIconView.isHidden = !isVolume
+        volumeFullIconView.isHidden = !isVolume
+
+        if isVolume {
+            updateVolumeDisplay(volume)
+        } else {
+            updateProgress(elapsed: lastElapsed, duration: lastDuration)
+        }
+    }
+
+    func updateVolumeDisplay(_ volume: Float) {
+        currentVolumeLevel = min(max(volume, 0.0), 1.0)
+        guard isVolumeMode, !isScrubbing else { return }
+        layoutIfNeeded()
+        progressWidthConstraint.constant = progressTrack.bounds.width * CGFloat(currentVolumeLevel)
+    }
+
     func updateProgress(elapsed: TimeInterval, duration: TimeInterval, fromScrub: Bool = false) {
         let safeDur = max(duration, 1.0)
+        lastElapsed = elapsed
+        lastDuration = safeDur
+        if isVolumeMode { return }
         if isScrubbing && !fromScrub { return }
         if !fromScrub {
             let ratio = CGFloat(min(max(elapsed / safeDur, 0.0), 1.0))
@@ -1211,6 +1269,72 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
         elapsedLabel.text = formatTime(elapsed)
         remainingLabel.text = "-\(formatTime(max(0, safeDur - elapsed)))"
+    }
+
+    private func makeVolumeMuteIcon(size: CGSize) -> UIImage? {
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        defer { UIGraphicsEndImageContext() }
+        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
+
+        // Speaker cone
+        ctx.setFillColor(UIColor.white.cgColor)
+        let speaker = UIBezierPath()
+        speaker.move(to: CGPoint(x: 2, y: 5))
+        speaker.addLine(to: CGPoint(x: 5.5, y: 5))
+        speaker.addLine(to: CGPoint(x: 10, y: 1.5))
+        speaker.addLine(to: CGPoint(x: 10, y: 12.5))
+        speaker.addLine(to: CGPoint(x: 5.5, y: 9))
+        speaker.addLine(to: CGPoint(x: 2, y: 9))
+        speaker.close()
+        speaker.fill()
+
+        // Mute "x"
+        ctx.setStrokeColor(UIColor.white.cgColor)
+        ctx.setLineWidth(1.8)
+        ctx.setLineCap(.round)
+        ctx.move(to: CGPoint(x: 13.5, y: 4.5))
+        ctx.addLine(to: CGPoint(x: 18.5, y: 9.5))
+        ctx.move(to: CGPoint(x: 18.5, y: 4.5))
+        ctx.addLine(to: CGPoint(x: 13.5, y: 9.5))
+        ctx.strokePath()
+
+        return UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
+    }
+
+    private func makeVolumeFullIcon(size: CGSize) -> UIImage? {
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        defer { UIGraphicsEndImageContext() }
+        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
+
+        // Speaker cone
+        ctx.setFillColor(UIColor.white.cgColor)
+        let speaker = UIBezierPath()
+        speaker.move(to: CGPoint(x: 1.5, y: 5))
+        speaker.addLine(to: CGPoint(x: 4.8, y: 5))
+        speaker.addLine(to: CGPoint(x: 9, y: 1.5))
+        speaker.addLine(to: CGPoint(x: 9, y: 12.5))
+        speaker.addLine(to: CGPoint(x: 4.8, y: 9))
+        speaker.addLine(to: CGPoint(x: 1.5, y: 9))
+        speaker.close()
+        speaker.fill()
+
+        // 3 sound wave arcs
+        UIColor.white.setStroke()
+        let waveCenter = CGPoint(x: 9.2, y: size.height / 2.0)
+        for r in [CGFloat(3.4), CGFloat(6.2), CGFloat(9.0)] {
+            let arc = UIBezierPath(
+                arcCenter: waveCenter,
+                radius: r,
+                startAngle: -.pi * 0.34,
+                endAngle: .pi * 0.34,
+                clockwise: true
+            )
+            arc.lineWidth = 1.6
+            arc.lineCapStyle = .round
+            arc.stroke()
+        }
+
+        return UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
     }
 
     private func formatTime(_ sec: TimeInterval) -> String {
@@ -1221,12 +1345,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     }
 
     private func makeDefaultNoteArtwork() -> UIImage? {
-        let size = CGSize(width: 96, height: 96)
+        let size = CGSize(width: 240, height: 240)
         UIGraphicsBeginImageContextWithOptions(size, true, 1.0)
         theme.highlightTop.setFill()
         UIRectFill(CGRect(origin: .zero, size: size))
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: 34, weight: .bold),
+            .font: UIFont.systemFont(ofSize: 78, weight: .bold),
             .foregroundColor: UIColor.white
         ]
         let str = "♫"

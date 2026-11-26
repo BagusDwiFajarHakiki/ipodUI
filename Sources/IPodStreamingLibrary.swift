@@ -533,7 +533,11 @@ final class IPodStreamingLibrary {
                     if let vid = extractVideoId(from: musicItem, allowPlaylist: false), !seen.contains(vid) {
                         let texts = extractFlexColumns(from: musicItem)
                         let title = texts.first ?? ""
-                        let artist = texts.dropFirst().first ?? "Unknown Artist"
+                        let rawSubtitle = texts.dropFirst().first ?? ""
+                        if isNonSongSubtitle(rawSubtitle) {
+                            return
+                        }
+                        let artist = cleanArtistName(from: rawSubtitle)
                         let album = texts.dropFirst(2).first ?? "Single"
                         let thumb = extractThumbnailURL(from: musicItem)
                         if !title.isEmpty && isPureSongTitle(title, artist) {
@@ -544,7 +548,8 @@ final class IPodStreamingLibrary {
                 } else if let vid = dict["videoId"] as? String, !vid.isEmpty, !seen.contains(vid) {
                     if let titleObj = dict["title"] as? [String: Any],
                        let title = extractText(from: titleObj) {
-                        let artist = extractText(from: dict["shortBylineText"] ?? dict["longBylineText"] ?? "") ?? "Unknown Artist"
+                        let rawArtist = extractText(from: dict["shortBylineText"] ?? dict["longBylineText"] ?? "")
+                        let artist = cleanArtistName(from: rawArtist)
                         if isPureSongTitle(title, artist) {
                             let thumb = extractThumbnailURL(from: dict)
                             seen.insert(vid)
@@ -602,6 +607,59 @@ final class IPodStreamingLibrary {
         return result
     }
 
+    private func isNonSongSubtitle(_ raw: String) -> Bool {
+        let lower = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefixes = ["playlist •", "profil •", "profile •", "artis •", "artist •", "tangga lagu •", "chart •", "episode •", "podcast •"]
+        return prefixes.contains(where: { lower.hasPrefix($0) })
+    }
+
+    private func cleanArtistName(from raw: String?) -> String {
+        guard let raw = raw, !raw.isEmpty else { return "Unknown Artist" }
+        let normalized = raw.replacingOccurrences(of: "\u{00A0}", with: " ")
+        let parts = normalized
+            .components(separatedBy: "•")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let ignoredExact: Set<String> = [
+            "lagu", "song", "video", "music video", "single", "ep", "album",
+            "artis", "artist", "profil", "profile", "tangga lagu", "chart",
+            "podcast", "episode", "official audio"
+        ]
+        let ignoredContains = [
+            "pemutaran", "ditonton", "views", "plays", "listeners",
+            "audiens", "pelanggan", "subscribers", "tracks"
+        ]
+
+        for part in parts {
+            let lower = part.lowercased()
+            if ignoredExact.contains(lower) { continue }
+            if ignoredContains.contains(where: { lower.contains($0) }) { continue }
+            // Skip pure durations (e.g. "3:45") or 4-digit release years (e.g. "2024")
+            if part.range(of: #"^\d{1,2}(:\d{2})+$"#, options: .regularExpression) != nil { continue }
+            if part.range(of: #"^\d{4}$"#, options: .regularExpression) != nil { continue }
+            return part
+        }
+        return parts.first ?? "Unknown Artist"
+    }
+
+    private func upgradeThumbnailURL(_ urlStr: String) -> String {
+        var upgraded = urlStr
+        if upgraded.contains("googleusercontent.com") {
+            upgraded = upgraded.replacingOccurrences(
+                of: #"=w\d+-h\d+[^&\s]*"#,
+                with: "=w360-h360-l90-rj",
+                options: .regularExpression
+            )
+            upgraded = upgraded.replacingOccurrences(
+                of: #"=s\d+[^&\s]*"#,
+                with: "=s360",
+                options: .regularExpression
+            )
+        }
+        return upgraded
+    }
+
     private func extractThumbnailURL(from dict: [String: Any]) -> String? {
         if let thumbObj = dict["thumbnail"] as? [String: Any],
            let musicThumb = thumbObj["musicThumbnailRenderer"] as? [String: Any],
@@ -609,13 +667,13 @@ final class IPodStreamingLibrary {
            let thumbs = innerThumb["thumbnails"] as? [[String: Any]],
            let last = thumbs.last,
            let urlStr = last["url"] as? String {
-            return urlStr
+            return upgradeThumbnailURL(urlStr)
         }
         if let thumbObj = dict["thumbnail"] as? [String: Any],
            let thumbs = thumbObj["thumbnails"] as? [[String: Any]],
            let last = thumbs.last,
            let urlStr = last["url"] as? String {
-            return urlStr
+            return upgradeThumbnailURL(urlStr)
         }
         return nil
     }
@@ -879,23 +937,39 @@ final class IPodStreamingLibrary {
             }
             URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
                 guard let self = self, let data = data, let rawImg = UIImage(data: data) else { return }
-                let lowRes = self.downsampleImage(rawImg, targetSide: 96)
+                let crispImg = self.downsampleImage(rawImg, targetSide: 320)
                 DispatchQueue.main.async {
-                    self.artworkCache[thumbStr] = lowRes
+                    self.artworkCache[thumbStr] = crispImg
                     if updateMainCatalog {
-                        self.replaceTrackArtwork(at: idx, expectedId: track.id, image: lowRes)
+                        self.replaceTrackArtwork(at: idx, expectedId: track.id, image: crispImg)
                     }
-                    self.onTrackArtworkLoaded?(track.id, lowRes)
+                    self.onTrackArtworkLoaded?(track.id, crispImg)
                 }
             }.resume()
         }
     }
 
     private func downsampleImage(_ image: UIImage, targetSide: CGFloat) -> UIImage {
-        let size = CGSize(width: targetSide, height: targetSide)
-        UIGraphicsBeginImageContextWithOptions(size, true, 1.0)
+        let targetSize = CGSize(width: targetSide, height: targetSide)
+        UIGraphicsBeginImageContextWithOptions(targetSize, true, 1.0)
         defer { UIGraphicsEndImageContext() }
-        image.draw(in: CGRect(origin: .zero, size: size))
+
+        let imgSize = image.size
+        guard imgSize.width > 0 && imgSize.height > 0 else {
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+            return UIGraphicsGetImageFromCurrentImageContext() ?? image
+        }
+        // Aspect-fill centered crop so 16:9 thumbnails stay sharp and undistorted in square CoverFlow
+        let scale = max(targetSide / imgSize.width, targetSide / imgSize.height)
+        let drawW = imgSize.width * scale
+        let drawH = imgSize.height * scale
+        let drawRect = CGRect(
+            x: (targetSide - drawW) / 2.0,
+            y: (targetSide - drawH) / 2.0,
+            width: drawW,
+            height: drawH
+        )
+        image.draw(in: drawRect)
         return UIGraphicsGetImageFromCurrentImageContext() ?? image
     }
 
@@ -904,7 +978,7 @@ final class IPodStreamingLibrary {
             return cached
         }
         let hue = CGFloat(abs(seed.hashValue) % 360) / 360.0
-        let size = CGSize(width: 96, height: 96)
+        let size = CGSize(width: 240, height: 240)
         UIGraphicsBeginImageContextWithOptions(size, true, 1.0)
         defer { UIGraphicsEndImageContext() }
 
@@ -912,7 +986,7 @@ final class IPodStreamingLibrary {
         UIRectFill(CGRect(origin: .zero, size: size))
 
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: 30, weight: .bold),
+            .font: UIFont.systemFont(ofSize: 72, weight: .bold),
             .foregroundColor: UIColor.white
         ]
         let note = "♪"

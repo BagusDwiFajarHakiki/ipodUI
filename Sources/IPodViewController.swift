@@ -20,10 +20,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private var menuStack: [(node: IPodMenuNode, selectedIndex: Int)] = [(.root, 0)]
     private var isNowPlayingActive = false
+    private var isNowPlayingVolumeMode = false
     private var isPlaylistsMenuEnabled: Bool = true
     private var currentGlowColor = UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
     private var playingTrackArtwork: UIImage?
     private var lastGlowSize: CGSize = .zero
+    private let hiddenVolumeView = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
+    private var volumeObserver: NSKeyValueObservation?
 
     private var player: AVPlayer?
     private var playbackTimer: Timer?
@@ -43,6 +46,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var watchdogRecoveriesForCurrentTrack: Int = 0
     private var currentStreamFallbacks: [(url: URL, userAgent: String)] = []
     private var didTryAndroidFallbackForCurrentTrack = false
+    private var lastWheelSeekTime: TimeInterval = 0
+    private var lastWheelSeekTarget: TimeInterval = 0
 
     override var prefersStatusBarHidden: Bool {
         return true
@@ -81,7 +86,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         screenView.onSeekRatioChanged = { [weak self] ratio, isFinished in
-            self?.seekToRatio(ratio, isFinished: isFinished)
+            guard let self = self else { return }
+            if self.isNowPlayingVolumeMode {
+                self.setSystemVolume(Float(ratio))
+            } else {
+                self.seekToRatio(ratio, isFinished: isFinished)
+            }
         }
 
         screenView.onActiveCoverImageChanged = { [weak self] image in
@@ -161,6 +171,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         clickWheel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(clickWheel)
 
+        hiddenVolumeView.alpha = 0.01
+        hiddenVolumeView.isUserInteractionEnabled = false
+        view.addSubview(hiddenVolumeView)
+
         NSLayoutConstraint.activate([
             screenView.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
             screenView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
@@ -172,7 +186,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             ambientGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -36),
             ambientGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 36),
 
-            clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -42),
+            clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -44),
             clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.70),
             clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor)
@@ -329,9 +343,28 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             try session.setCategory(.playback, mode: .default)
             try session.setActive(true)
             UIApplication.shared.beginReceivingRemoteControlEvents()
+            volumeObserver = session.observe(\.outputVolume, options: [.new]) { [weak self] _, change in
+                DispatchQueue.main.async {
+                    guard let self = self, self.isNowPlayingActive, self.isNowPlayingVolumeMode,
+                          let vol = change.newValue else { return }
+                    self.screenView.updateVolumeDisplay(vol)
+                }
+            }
         } catch {
             print("Audio session error: \(error)")
         }
+    }
+
+    private func currentSystemVolume() -> Float {
+        return AVAudioSession.sharedInstance().outputVolume
+    }
+
+    private func setSystemVolume(_ newValue: Float) {
+        let clamped = min(max(newValue, 0.0), 1.0)
+        if let slider = hiddenVolumeView.subviews.compactMap({ $0 as? UISlider }).first {
+            slider.value = clamped
+        }
+        screenView.updateVolumeDisplay(clamped)
     }
 
     private var isLightAppIconActive: Bool {
@@ -637,8 +670,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     // MARK: - ClickWheelDelegate
     func clickWheelDidScroll(steps: Int) {
         if isNowPlayingActive {
-            if let slider = MPVolumeView().subviews.compactMap({ $0 as? UISlider }).first {
-                slider.value = min(max(0, slider.value + Float(steps) * 0.06), 1.0)
+            if isNowPlayingVolumeMode {
+                setSystemVolume(currentSystemVolume() + Float(steps) * 0.06)
+            } else {
+                seekBy(seconds: Double(steps) * 5.0)
             }
             return
         }
@@ -678,6 +713,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     func clickWheelDidPressSelect() {
         if isNowPlayingActive {
+            isNowPlayingVolumeMode.toggle()
+            screenView.setVolumeBarMode(isNowPlayingVolumeMode, volume: currentSystemVolume())
             return
         }
         guard let top = menuStack.last else { return }
@@ -823,8 +860,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             }
         }
 
-        if !useRelatedOrder && currentQueue.indices.contains(currentTrackIndex),
-           currentQueue[currentTrackIndex].id == targetTrack.id,
+        if currentQueue.indices.contains(currentTrackIndex),
+           (currentQueue[currentTrackIndex].id == targetTrack.id
+            || (targetTrack.id.hasPrefix("innertube_")
+                && currentQueue[currentTrackIndex].assetURL != nil
+                && currentQueue[currentTrackIndex].assetURL == targetTrack.assetURL)),
            player != nil {
             if !isPlaying {
                 player?.play()
@@ -851,7 +891,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private func openNowPlayingScreen(transitionDirection: Int = 0, animateFromCoverFlow: Bool = false) {
         guard currentQueue.indices.contains(currentTrackIndex) else { return }
+        let wasAlreadyNowPlaying = isNowPlayingActive
         isNowPlayingActive = true
+        if !wasAlreadyNowPlaying {
+            isNowPlayingVolumeMode = false
+            screenView.setVolumeBarMode(false, volume: currentSystemVolume())
+        }
         let track = currentQueue[currentTrackIndex]
         screenView.showNowPlaying(
             track: track,
@@ -1094,6 +1139,39 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         playNextTrack()
+    }
+
+    private func seekBy(seconds delta: Double) {
+        guard let player = player, currentQueue.indices.contains(currentTrackIndex) else { return }
+        let track = currentQueue[currentTrackIndex]
+        let itemDur = player.currentItem.map { CMTimeGetSeconds($0.duration) } ?? track.duration
+        let validDur = (itemDur.isFinite && itemDur > 0) ? itemDur : track.duration
+        guard validDur > 0 else { return }
+
+        let now = Date().timeIntervalSinceReferenceDate
+        let rawCurrent = CMTimeGetSeconds(player.currentTime())
+        let baseSec: Double
+        if (now - lastWheelSeekTime) < 0.6 {
+            baseSec = lastWheelSeekTarget
+        } else {
+            baseSec = rawCurrent.isFinite ? rawCurrent : max(0.0, lastObservedElapsed)
+        }
+        let maxTarget = max(0.0, validDur - 0.5)
+        let targetSec = min(max(0.0, baseSec + delta), maxTarget)
+
+        lastWheelSeekTime = now
+        lastWheelSeekTarget = targetSec
+        resetWatchdogState()
+        lastObservedElapsed = targetSec
+        screenView.updateProgress(elapsed: targetSec, duration: validDur)
+
+        let targetTime = CMTime(seconds: targetSec, preferredTimescale: 600)
+        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            if self?.isPlaying == true && player.rate == 0 {
+                player.play()
+            }
+        }
+        updateNowPlayingInfo(track: track, elapsed: targetSec)
     }
 
     private func seekToRatio(_ ratio: Double, isFinished: Bool) {
