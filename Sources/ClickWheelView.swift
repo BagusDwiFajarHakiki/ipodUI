@@ -35,7 +35,6 @@ class ClickWheelView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func setupWheel() {
-        // Tanpa garis pinggir pada roda sentuh maupun tombol tengah
         wheelLayer.lineWidth = 0
         wheelLayer.strokeColor = nil
         wheelLayer.shadowColor = UIColor.black.cgColor

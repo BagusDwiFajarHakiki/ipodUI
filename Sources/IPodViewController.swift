@@ -114,6 +114,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         ])
     }
 
+    // Lebar cahaya di bawah disamakan persis dengan cahaya sekeliling LCD agar menyatu seamless
     private func makeNaturalLcdGlowImage(
         canvasSize: CGSize,
         lcdRect: CGRect,
@@ -122,7 +123,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        // 1. Pendaran lebih cerah di sekeliling tepi LCD (atas, kiri, kanan, bawah)
         let surroundFeather: CGFloat = 38.0
         let surroundSteps = 32
         for i in 0..<surroundSteps {
@@ -136,54 +136,49 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             ctx.fillPath()
         }
 
-        // 2. Perpanjangan cahaya ke bawah dengan kecerahan lebih jelas dan tepi kiri-kanan memudar ke dalam
+        // Perpanjangan ke bawah dengan lebar sama persis seperti cahaya di sekeliling LCD
         let downExtensionHeight = max(0, canvasSize.height - lcdRect.maxY)
         if downExtensionHeight > 0 {
             let downSteps = 36
             for i in 0..<downSteps {
                 let t = CGFloat(i) / CGFloat(downSteps - 1)
                 let currentHeight = t * downExtensionHeight
-                // Semakin ke bawah, sisi kiri & kanan ditarik masuk agar tepi luar selalu memudar halus
-                let sidePullIn = pow(t, 1.35) * (lcdRect.width * 0.24)
+                let expandX = surroundFeather * 0.85
                 let downRect = CGRect(
-                    x: lcdRect.minX + sidePullIn,
+                    x: lcdRect.minX - expandX,
                     y: lcdRect.maxY - 2,
-                    width: max(12, lcdRect.width - sidePullIn * 2),
+                    width: lcdRect.width + expandX * 2,
                     height: max(2, currentHeight)
                 )
-                let alpha = (1.0 - t * 0.65) * pow(1.0 - t, 1.15) * 0.085
+                let alpha = (1.0 - t * 0.65) * pow(1.0 - t, 1.15) * 0.078
                 ctx.setFillColor(UIColor.white.withAlphaComponent(alpha).cgColor)
-                let path = UIBezierPath(roundedRect: downRect, cornerRadius: cornerRadius + t * 18.0)
+                let path = UIBezierPath(roundedRect: downRect, cornerRadius: cornerRadius + expandX)
                 ctx.addPath(path.cgPath)
                 ctx.fillPath()
             }
         }
 
-        // 3. Mask tunggal di akhir agar sisi kiri, kanan, dan bawah memudar mulus tanpa garis tepi
         ctx.setBlendMode(.destinationIn)
         let maskWidth = canvasSize.width
         let maskHeight = canvasSize.height
 
-        if let maskCanvas = UIGraphicsGetCurrentContext() {
-            // Gradien horizontal: pudar sejak 18% dari kiri/kanan sehingga sisi kiri & kanan benar-benar memudar
-            let hColors = [
-                UIColor.white.withAlphaComponent(0.0).cgColor,
-                UIColor.white.withAlphaComponent(0.32).cgColor,
-                UIColor.white.withAlphaComponent(0.85).cgColor,
-                UIColor.white.withAlphaComponent(1.0).cgColor,
-                UIColor.white.withAlphaComponent(0.85).cgColor,
-                UIColor.white.withAlphaComponent(0.32).cgColor,
-                UIColor.white.withAlphaComponent(0.0).cgColor
-            ] as CFArray
-            let hLocations: [CGFloat] = [0.04, 0.18, 0.32, 0.50, 0.68, 0.82, 0.96]
-            if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
-                maskCanvas.drawLinearGradient(
-                    hGrad,
-                    start: CGPoint(x: 0, y: maskHeight * 0.5),
-                    end: CGPoint(x: maskWidth, y: maskHeight * 0.5),
-                    options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
-                )
-            }
+        let hColors = [
+            UIColor.white.withAlphaComponent(0.0).cgColor,
+            UIColor.white.withAlphaComponent(0.32).cgColor,
+            UIColor.white.withAlphaComponent(0.85).cgColor,
+            UIColor.white.withAlphaComponent(1.0).cgColor,
+            UIColor.white.withAlphaComponent(0.85).cgColor,
+            UIColor.white.withAlphaComponent(0.32).cgColor,
+            UIColor.white.withAlphaComponent(0.0).cgColor
+        ] as CFArray
+        let hLocations: [CGFloat] = [0.04, 0.18, 0.32, 0.50, 0.68, 0.82, 0.96]
+        if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
+            ctx.drawLinearGradient(
+                hGrad,
+                start: CGPoint(x: 0, y: maskHeight * 0.5),
+                end: CGPoint(x: maskWidth, y: maskHeight * 0.5),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
         }
 
         let fadeStartRatio = min(0.90, max(0.38, (lcdRect.maxY + downExtensionHeight * 0.45) / max(1, maskHeight)))
@@ -281,7 +276,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         let avgColor = UIColor(red: rTotal / count, green: gTotal / count, blue: bTotal / count, alpha: 1.0)
         var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         if avgColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
-            return UIColor(hue: h, saturation: min(1.0, max(s * 1.4, 0.40)), brightness: min(1.0, max(b * 1.18, 0.58)), alpha: 1.0)
+            return UIColor(hue: h, saturation: min(1.0, max(s * 1.35, 0.35)), brightness: min(1.0, max(b * 1.18, 0.58)), alpha: 1.0)
         }
         return avgColor
     }
@@ -311,13 +306,20 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
-    // MARK: - Menu Navigation Engine
+    private func triggerShuffleSongs() {
+        let all = IPodMusicLibrary.shared.allTracks
+        guard !all.isEmpty else { return }
+        let shuffled = all.shuffled()
+        let randomStartIdx = Int.random(in: 0..<shuffled.count)
+        startQueue(tracks: shuffled, at: randomStartIdx)
+    }
+
+    // MARK: - Menu Navigation Engine (Tanpa Menu Shuffle Songs)
     private func rows(for node: IPodMenuNode) -> (title: String, items: [IPodMenuRow]) {
         switch node {
         case .root:
             return ("iPod", [
                 IPodMenuRow(title: "Music", hasSubmenu: true),
-                IPodMenuRow(title: "Shuffle Songs", hasSubmenu: false),
                 IPodMenuRow(title: "Settings", hasSubmenu: true)
             ])
 
@@ -502,7 +504,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     func clickWheelDidPressSelect() {
-        if isNowPlayingActive { return }
+        // Di halaman Now Playing, tombol tengah scroll wheel berfungsi sebagai Shuffle Songs
+        if isNowPlayingActive {
+            triggerShuffleSongs()
+            return
+        }
         guard let top = menuStack.last else { return }
         let idx = screenView.selectedIndex
 
@@ -515,11 +521,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                     pushMenu(.allSongs)
                 }
             } else if idx == 1 {
-                let all = IPodMusicLibrary.shared.allTracks
-                if !all.isEmpty {
-                    startQueue(tracks: all.shuffled(), at: 0)
-                }
-            } else if idx == 2 {
                 pushMenu(.settings)
             }
 
@@ -574,6 +575,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     func clickWheelDidPressPlayPause() {
+        // Saat di halaman utama dan tidak ada musik yang sedang diputar/aktif, tombol bawah berfungsi sebagai Shuffle Songs
+        if !isNowPlayingActive && (currentQueue.isEmpty || !isPlaying) {
+            triggerShuffleSongs()
+            return
+        }
         togglePlayPause()
     }
 
@@ -689,8 +695,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private func togglePlayPause() {
         guard let player = player, currentQueue.indices.contains(currentTrackIndex) else {
-            let all = IPodMusicLibrary.shared.allTracks
-            if !all.isEmpty { startQueue(tracks: all, at: 0) }
+            triggerShuffleSongs()
             return
         }
         if isPlaying {
