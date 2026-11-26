@@ -73,7 +73,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         super.viewDidLayoutSubviews()
         bodyGradient.frame = view.bounds
 
-        // Render ulang tekstur cahaya pinggiran LCD dengan area pudar lebih luas dan lembut
         let edgeSize = lcdEdgeGlowImageView.bounds.size
         if edgeSize.width > 0, edgeSize.height > 0, edgeSize != lastEdgeGlowSize {
             lastEdgeGlowSize = edgeSize
@@ -86,23 +85,22 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             )
         }
 
-        // Render ulang tekstur cahaya bawah yang memanjang sampai ke bawah Click Wheel
         let bottomSize = bottomWheelGlowImageView.bounds.size
         if bottomSize.width > 0, bottomSize.height > 0, bottomSize != lastBottomGlowSize {
             lastBottomGlowSize = bottomSize
-            bottomWheelGlowImageView.image = makeSoftVerticalBottomGlowImage(size: bottomSize)
+            bottomWheelGlowImageView.image = makeWideWheelGlowImage(size: bottomSize)
         }
     }
 
     private func setupBodyAndLayout() {
         view.layer.insertSublayer(bodyGradient, at: 0)
 
-        // Cahaya pinggiran LCD dengan area pudar luas di atas, kiri, kanan, dan bawah
+        // Cahaya pinggiran LCD dengan area pudar luas di semua sisi
         lcdEdgeGlowImageView.contentMode = .scaleToFill
         lcdEdgeGlowImageView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(lcdEdgeGlowImageView)
 
-        // Cahaya tambahan di bagian bawah yang memanjang sampai ke bawah Click Wheel
+        // Cahaya lebar di bawah LCD yang menyapu sampai ke area Click Wheel
         bottomWheelGlowImageView.contentMode = .scaleToFill
         bottomWheelGlowImageView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(bottomWheelGlowImageView)
@@ -119,7 +117,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
-            // Ruang ekstra di semua sisi (atas, kiri, kanan, bawah) agar area pudar lebih lebar
             lcdEdgeGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -38),
             lcdEdgeGlowImageView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor, constant: 44),
             lcdEdgeGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -24),
@@ -130,11 +127,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.70),
             clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor),
 
-            // Memanjang dari bawah LCD hingga melewati batas bawah Click Wheel
-            bottomWheelGlowImageView.topAnchor.constraint(equalTo: screenView.bottomAnchor, constant: -16),
-            bottomWheelGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: 28),
-            bottomWheelGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -28),
-            bottomWheelGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 28)
+            // Membentang lebar dari bawah LCD hingga menutupi seluruh area Click Wheel
+            bottomWheelGlowImageView.topAnchor.constraint(equalTo: screenView.bottomAnchor, constant: -28),
+            bottomWheelGlowImageView.bottomAnchor.constraint(equalTo: clickWheel.bottomAnchor, constant: 24),
+            bottomWheelGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -42),
+            bottomWheelGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 42)
         ])
     }
 
@@ -162,7 +159,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             let rect = innerRect.insetBy(dx: -expand, dy: -expand)
             let radius = cornerRadius + expand
 
-            // Intensitas lebih rendah dan kurva pudar lebih panjang agar tidak terlalu terang di tepi LCD
             let alpha = pow(1.0 - progress, 2.6) * 0.075
             ctx.setFillColor(UIColor.white.withAlphaComponent(alpha).cgColor)
             let path = UIBezierPath(roundedRect: rect, cornerRadius: radius)
@@ -175,30 +171,54 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         return img
     }
 
-    private func makeSoftVerticalBottomGlowImage(size: CGSize) -> UIImage? {
+    // Menghasilkan cahaya melebar kiri-kanan di bawah LCD yang turun menyapu area Click Wheel
+    private func makeWideWheelGlowImage(size: CGSize) -> UIImage? {
         UIGraphicsBeginImageContextWithOptions(size, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        let center = CGPoint(x: size.width / 2.0, y: size.height * 0.42)
-        let maxRadius = max(size.width * 0.58, size.height * 0.58)
-        let colors = [
-            UIColor.white.withAlphaComponent(0.32).cgColor,
-            UIColor.white.withAlphaComponent(0.14).cgColor,
-            UIColor.white.withAlphaComponent(0.04).cgColor,
+        let w = size.width
+        let h = size.height
+
+        // Gradien vertikal dari bawah LCD (y = 0) turun ke area Click Wheel (y = h)
+        let vColors = [
+            UIColor.white.withAlphaComponent(0.90).cgColor,
+            UIColor.white.withAlphaComponent(0.55).cgColor,
+            UIColor.white.withAlphaComponent(0.22).cgColor,
             UIColor.white.withAlphaComponent(0.0).cgColor
         ] as CFArray
-        let locations: [CGFloat] = [0.0, 0.35, 0.72, 1.0]
+        let vLocations: [CGFloat] = [0.0, 0.35, 0.72, 1.0]
 
-        if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: locations) {
+        if let vGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: vColors, locations: vLocations) {
+            ctx.drawLinearGradient(
+                vGrad,
+                start: CGPoint(x: w * 0.5, y: 0),
+                end: CGPoint(x: w * 0.5, y: h),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+        }
+
+        // Mask horizontal agar memudar lembut di sisi kiri dan kanan
+        ctx.setBlendMode(.destinationIn)
+        let hCenter = CGPoint(x: w * 0.5, y: h * 0.45)
+        let hRadius = w * 0.52
+        let hColors = [
+            UIColor.white.withAlphaComponent(1.0).cgColor,
+            UIColor.white.withAlphaComponent(0.65).cgColor,
+            UIColor.white.withAlphaComponent(0.15).cgColor,
+            UIColor.white.withAlphaComponent(0.0).cgColor
+        ] as CFArray
+        let hLocations: [CGFloat] = [0.0, 0.45, 0.80, 1.0]
+
+        if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
             ctx.saveGState()
-            ctx.translateBy(x: center.x, y: center.y)
-            ctx.scaleBy(x: size.width / (maxRadius * 2.0), y: size.height / (maxRadius * 2.0))
+            ctx.translateBy(x: hCenter.x, y: hCenter.y)
+            ctx.scaleBy(x: 1.0, y: (h * 0.75) / hRadius)
             ctx.drawRadialGradient(
-                gradient,
+                hGrad,
                 startCenter: .zero,
                 startRadius: 0,
                 endCenter: .zero,
-                endRadius: maxRadius,
+                endRadius: hRadius,
                 options: [.drawsAfterEndLocation]
             )
             ctx.restoreGState()
@@ -238,8 +258,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         let isDark = (screenView.theme == .darkPod)
         lcdEdgeGlowImageView.tintColor = color
         bottomWheelGlowImageView.tintColor = color
-        lcdEdgeGlowImageView.alpha = isDark ? 0.62 : 0.38
-        bottomWheelGlowImageView.alpha = isDark ? 0.42 : 0.24
+        lcdEdgeGlowImageView.alpha = isDark ? 0.60 : 0.36
+        bottomWheelGlowImageView.alpha = isDark ? 0.44 : 0.24
     }
 
     private func updateAmbientGlow(from image: UIImage?) {
