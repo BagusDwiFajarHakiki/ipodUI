@@ -54,7 +54,6 @@ final class IPodStreamingLibrary {
     ]
     private var queryIndex: Int = 0
 
-    // Aliran MP3 terbuka sebagai cadangan terakhir jika semua stream ekstraksi diblokir/cipher
     private let directAudioFallbackURLs: [String] = [
         "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
         "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
@@ -194,7 +193,7 @@ final class IPodStreamingLibrary {
     }
 
     private func fetchSongsFromInnerTube(reshuffle: Bool, completion: @escaping (Bool) -> Void) {
-        let q = queries[queryIndex % queries.count]
+        let q = songQueries[queryIndex % songQueries.count]
         queryIndex += 1
 
         let clients: [MetroLite12Client] = [.iosMusic, .webRemix, .tvEmbedded]
@@ -293,7 +292,6 @@ final class IPodStreamingLibrary {
         }.resume()
     }
 
-    // Filter ketat: hanya lagu audio tunggal, menolak playlist, episode, podcast, mix, atau kompilasi panjang
     private func parseSongsFromSearchJSON(_ root: Any) -> [InnerTubeSongEntry] {
         var list: [InnerTubeSongEntry] = []
         var seen = Set<String>()
