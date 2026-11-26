@@ -745,7 +745,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         IPodStreamingLibrary.shared.resolvePlayableAudioURL(for: track) { [weak self] resolvedURL in
-            guard let self = self, let url = resolvedURL ?? track.assetURL else { return }
+            guard let self = self, let url = resolvedURL else { return }
             guard self.currentQueue.indices.contains(self.currentTrackIndex),
                   self.currentQueue[self.currentTrackIndex].id == track.id else { return }
 

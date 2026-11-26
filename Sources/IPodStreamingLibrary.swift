@@ -2,7 +2,7 @@ import Foundation
 import UIKit
 import MediaPlayer
 
-private enum MetroLiteStreamClient {
+private enum MetroLite12Client {
     case iosMusic
     case webRemix
     case tvEmbedded
@@ -41,39 +41,20 @@ final class IPodStreamingLibrary {
 
     private(set) var allStreamingTracks: [IPodTrack] = []
     private var videoIdByTrackId: [String: String] = [:]
-    private var resolvedAudioURLCache: [String: URL] = [:]
+    private var thumbnailURLByTrackId: [String: String] = [:]
+    private var resolvedStreamURLCache: [String: URL] = [:]
     private var artworkCache: [String: UIImage] = [:]
 
-    private let songQueries = [
-        "official audio song",
-        "indie song acoustic",
-        "synthwave song track",
-        "city pop song",
-        "jazz instrumental song"
+    private let queries = [
+        "pop hits official audio",
+        "indie acoustic song",
+        "synthwave electronic music",
+        "lo fi beats chill song",
+        "rock alternative track"
     ]
-    private var queryCursor: Int = 0
-
-    private let verifiedAudioStreams: [String] = [
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-10.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-11.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-12.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-13.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-14.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-15.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-16.mp3"
-    ]
+    private var queryIndex: Int = 0
 
     private init() {
-        loadSongsCatalog(reshuffle: false)
         fetchSongsFromInnerTube(reshuffle: false) { _ in }
     }
 
@@ -99,12 +80,7 @@ final class IPodStreamingLibrary {
     }
 
     func refreshTracks(completion: @escaping (Bool) -> Void) {
-        fetchSongsFromInnerTube(reshuffle: true) { [weak self] success in
-            if !success {
-                self?.loadSongsCatalog(reshuffle: true)
-            }
-            completion(true)
-        }
+        fetchSongsFromInnerTube(reshuffle: true, completion: completion)
     }
 
     func tracksPage(pageIndex: Int) -> (tracks: [IPodTrack], currentPage: Int, totalPages: Int, hasNextPage: Bool) {
@@ -125,7 +101,7 @@ final class IPodStreamingLibrary {
         guard !source.isEmpty else { return [selectedTrack] }
 
         let others = source.filter { $0.id != selectedTrack.id }
-        let selectedWords = Set(
+        let selectedTokens = Set(
             (selectedTrack.title + " " + selectedTrack.artist + " " + selectedTrack.album)
                 .lowercased()
                 .components(separatedBy: CharacterSet.alphanumerics.inverted)
@@ -140,114 +116,114 @@ final class IPodStreamingLibrary {
             if candidate.album.caseInsensitiveCompare(selectedTrack.album) == .orderedSame {
                 score += 6
             }
-            let candWords = Set(
+            let candTokens = Set(
                 (candidate.title + " " + candidate.artist + " " + candidate.album)
                     .lowercased()
                     .components(separatedBy: CharacterSet.alphanumerics.inverted)
                     .filter { $0.count >= 3 }
             )
-            let overlapCount = selectedWords.intersection(candWords).count
-            score += overlapCount * 3
+            let overlap = selectedTokens.intersection(candTokens).count
+            score += overlap * 3
             return (candidate, score, Int.random(in: 0...4))
         }
 
-        let sortedRelated = scored.sorted {
+        let ordered = scored.sorted {
             if $0.score != $1.score { return $0.score > $1.score }
             return $0.jitter < $1.jitter
         }.map { $0.track }
 
-        return [selectedTrack] + sortedRelated
+        return [selectedTrack] + ordered
     }
 
     func resolvePlayableAudioURL(for track: IPodTrack, completion: @escaping (URL?) -> Void) {
-        if let cached = resolvedAudioURLCache[track.id] {
+        if let cached = resolvedStreamURLCache[track.id] {
             completion(cached)
             return
         }
 
-        let fallbackStreamURL = track.assetURL ?? URL(string: verifiedAudioStreams[abs(track.id.hashValue) % verifiedAudioStreams.count])
-
         guard let videoId = videoIdByTrackId[track.id], !videoId.isEmpty else {
-            if let fURL = fallbackStreamURL {
-                resolvedAudioURLCache[track.id] = fURL
-            }
-            completion(fallbackStreamURL)
+            completion(track.assetURL)
             return
         }
 
-        let clients: [MetroLiteStreamClient] = [.iosMusic, .webRemix, .tvEmbedded]
-        resolveStreamViaClients(videoId: videoId, clients: clients, index: 0) { [weak self] resolvedURL in
-            guard let self = self else {
-                completion(fallbackStreamURL)
-                return
-            }
-            if let url = resolvedURL {
-                self.resolvedAudioURLCache[track.id] = url
+        let clients: [MetroLite12Client] = [.iosMusic, .webRemix, .tvEmbedded]
+        resolvePlayerStream(videoId: videoId, clients: clients, index: 0) { [weak self] streamURL in
+            if let url = streamURL {
+                self?.resolvedStreamURLCache[track.id] = url
                 DispatchQueue.main.async { completion(url) }
                 return
             }
 
-            if let fURL = fallbackStreamURL {
-                self.resolvedAudioURLCache[track.id] = fURL
-            }
-            DispatchQueue.main.async {
-                completion(fallbackStreamURL)
-            }
-        }
-    }
-
-    private func fetchSongsFromInnerTube(reshuffle: Bool, completion: @escaping (Bool) -> Void) {
-        let query = songQueries[queryCursor % songQueries.count]
-        queryCursor += 1
-
-        let searchClients: [MetroLiteStreamClient] = [.webRemix, .iosMusic]
-        searchInnerTubeSongsOnly(query: query, clients: searchClients, index: 0) { [weak self] items in
-            guard let self = self, !items.isEmpty else {
-                DispatchQueue.main.async { completion(false) }
-                return
-            }
-
-            var collected: [IPodTrack] = []
-            var idMap: [String: String] = [:]
-
-            for (idx, item) in items.prefix(100).enumerated() {
-                let trackId = "song_online_\(idx)_\(item.videoId)"
-                let art = self.makeLowResArtwork(title: item.title, artist: item.artist, tag: "Song")
-                let streamURL = URL(string: self.verifiedAudioStreams[idx % self.verifiedAudioStreams.count])
-                let track = self.makeTrack(
-                    id: trackId,
-                    title: item.title,
-                    artist: item.artist,
-                    album: item.album,
-                    duration: item.duration,
-                    assetURL: streamURL,
-                    artworkImage: art
-                )
-                collected.append(track)
-                idMap[trackId] = item.videoId
-            }
-
-            DispatchQueue.main.async {
-                self.videoIdByTrackId = idMap
-                self.allStreamingTracks = reshuffle ? collected.shuffled() : collected
-                completion(!collected.isEmpty)
+            // Fallback ekstraksi dari halaman watch mobile jika terkena blokir / LOGIN_REQUIRED / 403
+            self?.resolveFromMobileWatchPage(videoId: videoId) { watchStreamURL in
+                if let wURL = watchStreamURL {
+                    self?.resolvedStreamURLCache[track.id] = wURL
+                }
+                DispatchQueue.main.async {
+                    completion(watchStreamURL)
+                }
             }
         }
     }
 
-    private struct ParsedSongItem {
+    private struct InnerTubeSongEntry {
         let videoId: String
         let title: String
         let artist: String
         let album: String
-        let duration: TimeInterval
+        let thumbnailURL: String?
     }
 
-    private func searchInnerTubeSongsOnly(
+    private func fetchSongsFromInnerTube(reshuffle: Bool, completion: @escaping (Bool) -> Void) {
+        let q = queries[queryIndex % queries.count]
+        queryIndex += 1
+
+        let clients: [MetroLite12Client] = [.iosMusic, .webRemix, .tvEmbedded]
+        searchInnerTube(query: q, clients: clients, index: 0) { [weak self] entries in
+            guard let self = self else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+
+            var tracks: [IPodTrack] = []
+            var idMap: [String: String] = [:]
+            var thumbMap: [String: String] = [:]
+
+            for (idx, entry) in entries.enumerated() {
+                let trackId = "innertube_\(entry.videoId)_\(idx)"
+                let placeholderArt = self.placeholderArtwork(seed: entry.videoId)
+                let watchURL = URL(string: "https://m.youtube.com/watch?v=\(entry.videoId)")
+                let track = self.makeTrack(
+                    id: trackId,
+                    title: entry.title,
+                    artist: entry.artist,
+                    album: entry.album,
+                    duration: 195,
+                    assetURL: watchURL,
+                    artworkImage: placeholderArt
+                )
+                tracks.append(track)
+                idMap[trackId] = entry.videoId
+                if let tURL = entry.thumbnailURL {
+                    thumbMap[trackId] = tURL
+                }
+            }
+
+            DispatchQueue.main.async {
+                self.videoIdByTrackId = idMap
+                self.thumbnailURLByTrackId = thumbMap
+                self.allStreamingTracks = reshuffle ? tracks.shuffled() : tracks
+                self.loadLowResThumbnailsAsync(for: self.allStreamingTracks)
+                completion(!tracks.isEmpty)
+            }
+        }
+    }
+
+    private func searchInnerTube(
         query: String,
-        clients: [MetroLiteStreamClient],
+        clients: [MetroLite12Client],
         index: Int,
-        completion: @escaping ([ParsedSongItem]) -> Void
+        completion: @escaping ([InnerTubeSongEntry]) -> Void
     ) {
         guard clients.indices.contains(index) else {
             completion([])
@@ -259,7 +235,7 @@ final class IPodStreamingLibrary {
             return
         }
 
-        let payload: [String: Any] = [
+        let body: [String: Any] = [
             "context": [
                 "client": [
                     "clientName": client.clientName,
@@ -273,10 +249,10 @@ final class IPodStreamingLibrary {
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 8.0
+        request.timeoutInterval = 10.0
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
@@ -285,108 +261,128 @@ final class IPodStreamingLibrary {
                   let http = response as? HTTPURLResponse,
                   http.statusCode == 200,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                self.searchInnerTubeSongsOnly(query: query, clients: clients, index: index + 1, completion: completion)
+                self.searchInnerTube(query: query, clients: clients, index: index + 1, completion: completion)
                 return
             }
 
-            let songs = self.extractOnlySongsFromSearchJSON(json)
-            if !songs.isEmpty {
-                completion(songs)
+            let parsed = self.parseSongsFromSearchJSON(json)
+            if !parsed.isEmpty {
+                completion(parsed)
             } else {
-                self.searchInnerTubeSongsOnly(query: query, clients: clients, index: index + 1, completion: completion)
+                self.searchInnerTube(query: query, clients: clients, index: index + 1, completion: completion)
             }
         }.resume()
     }
 
-    private func extractOnlySongsFromSearchJSON(_ root: Any) -> [ParsedSongItem] {
-        var results: [ParsedSongItem] = []
-        var seenIds = Set<String>()
+    private func parseSongsFromSearchJSON(_ root: Any) -> [InnerTubeSongEntry] {
+        var list: [InnerTubeSongEntry] = []
+        var seen = Set<String>()
 
-        let bannedKeywords = ["playlist", "mix", "compilation", "full album", "hour", "24/7", "radio", "live set"]
+        let excludedWords = ["playlist", "mix", "compilation", "full album", "hour", "24/7", "radio"]
 
-        func isSongTitleAllowed(_ title: String) -> Bool {
+        func isAllowedSongTitle(_ title: String) -> Bool {
             let lower = title.lowercased()
-            return !bannedKeywords.contains { lower.contains($0) }
+            return !excludedWords.contains { lower.contains($0) }
         }
 
-        func walk(_ node: Any) {
+        func traverse(_ node: Any) {
             if let dict = node as? [String: Any] {
                 if dict["playlistId"] != nil || dict["musicPlaylistRenderer"] != nil || dict["playlistRenderer"] != nil {
                     return
                 }
 
-                if let renderer = dict["musicResponsiveListItemRenderer"] as? [String: Any] {
-                    if let vid = extractSongVideoId(from: renderer), !seenIds.contains(vid) {
-                        let texts = extractFlexStrings(from: renderer)
+                if let musicItem = dict["musicResponsiveListItemRenderer"] as? [String: Any] {
+                    if let vid = extractVideoId(from: musicItem, allowPlaylist: false), !seen.contains(vid) {
+                        let texts = extractFlexColumns(from: musicItem)
                         let title = texts.first ?? ""
                         let artist = texts.dropFirst().first ?? "Unknown Artist"
                         let album = texts.dropFirst(2).first ?? "Single"
-                        if !title.isEmpty && isSongTitleAllowed(title) {
-                            seenIds.insert(vid)
-                            results.append(ParsedSongItem(videoId: vid, title: title, artist: artist, album: album, duration: 205))
+                        let thumb = extractThumbnailURL(from: musicItem)
+                        if !title.isEmpty && isAllowedSongTitle(title) {
+                            seen.insert(vid)
+                            list.append(InnerTubeSongEntry(videoId: vid, title: title, artist: artist, album: album, thumbnailURL: thumb))
                         }
                     }
-                } else if let vid = dict["videoId"] as? String, !vid.isEmpty, !seenIds.contains(vid) {
+                } else if let vid = dict["videoId"] as? String, !vid.isEmpty, !seen.contains(vid) {
                     if let titleObj = dict["title"] as? [String: Any],
-                       let titleText = extractText(from: titleObj),
-                       isSongTitleAllowed(titleText) {
-                        let authorText = extractText(from: dict["shortBylineText"] ?? dict["longBylineText"] ?? "") ?? "Unknown Artist"
-                        seenIds.insert(vid)
-                        results.append(ParsedSongItem(videoId: vid, title: titleText, artist: authorText, album: "Single", duration: 205))
+                       let title = extractText(from: titleObj),
+                       isAllowedSongTitle(title) {
+                        let artist = extractText(from: dict["shortBylineText"] ?? dict["longBylineText"] ?? "") ?? "Unknown Artist"
+                        let thumb = extractThumbnailURL(from: dict)
+                        seen.insert(vid)
+                        list.append(InnerTubeSongEntry(videoId: vid, title: title, artist: artist, album: "Single", thumbnailURL: thumb))
                     }
                 }
 
-                for val in dict.values {
-                    walk(val)
+                for value in dict.values {
+                    traverse(value)
                 }
-            } else if let arr = node as? [Any] {
-                for item in arr {
-                    walk(item)
+            } else if let array = node as? [Any] {
+                for item in array {
+                    traverse(item)
                 }
             }
         }
 
-        walk(root)
-        return results
+        traverse(root)
+        return list
     }
 
-    private func extractSongVideoId(from renderer: [String: Any]) -> String? {
+    private func extractVideoId(from renderer: [String: Any], allowPlaylist: Bool) -> String? {
         if let nav = renderer["navigationEndpoint"] as? [String: Any],
            let watch = nav["watchEndpoint"] as? [String: Any],
-           watch["playlistId"] == nil,
+           (allowPlaylist || watch["playlistId"] == nil),
            let vid = watch["videoId"] as? String {
             return vid
         }
         if let overlay = renderer["overlay"] as? [String: Any],
-           let button = overlay["musicItemThumbnailOverlayRenderer"] as? [String: Any],
-           let content = button["content"] as? [String: Any],
+           let thumbOverlay = overlay["musicItemThumbnailOverlayRenderer"] as? [String: Any],
+           let content = thumbOverlay["content"] as? [String: Any],
            let playBtn = content["musicPlayButtonRenderer"] as? [String: Any],
            let ep = playBtn["playNavigationEndpoint"] as? [String: Any],
            let watch = ep["watchEndpoint"] as? [String: Any],
-           watch["playlistId"] == nil,
+           (allowPlaylist || watch["playlistId"] == nil),
            let vid = watch["videoId"] as? String {
             return vid
         }
         return nil
     }
 
-    private func extractFlexStrings(from renderer: [String: Any]) -> [String] {
-        var collected: [String] = []
+    private func extractFlexColumns(from renderer: [String: Any]) -> [String] {
+        var result: [String] = []
         if let cols = renderer["flexColumns"] as? [[String: Any]] {
             for col in cols {
-                if let colRenderer = col["musicResponsiveListItemFlexColumnRenderer"] as? [String: Any],
-                   let textObj = colRenderer["text"],
+                if let flex = col["musicResponsiveListItemFlexColumnRenderer"] as? [String: Any],
+                   let textObj = flex["text"],
                    let str = extractText(from: textObj),
                    !str.isEmpty {
-                    collected.append(str)
+                    result.append(str)
                 }
             }
         }
-        return collected
+        return result
     }
 
-    private func extractText(from anyObj: Any) -> String? {
-        if let dict = anyObj as? [String: Any] {
+    private func extractThumbnailURL(from dict: [String: Any]) -> String? {
+        if let thumbObj = dict["thumbnail"] as? [String: Any],
+           let musicThumb = thumbObj["musicThumbnailRenderer"] as? [String: Any],
+           let innerThumb = musicThumb["thumbnail"] as? [String: Any],
+           let thumbs = innerThumb["thumbnails"] as? [[String: Any]],
+           let last = thumbs.last,
+           let urlStr = last["url"] as? String {
+            return urlStr
+        }
+        if let thumbObj = dict["thumbnail"] as? [String: Any],
+           let thumbs = thumbObj["thumbnails"] as? [[String: Any]],
+           let last = thumbs.last,
+           let urlStr = last["url"] as? String {
+            return urlStr
+        }
+        return nil
+    }
+
+    private func extractText(from anyValue: Any) -> String? {
+        if let dict = anyValue as? [String: Any] {
             if let simple = dict["simpleText"] as? String {
                 return simple
             }
@@ -398,9 +394,9 @@ final class IPodStreamingLibrary {
         return nil
     }
 
-    private func resolveStreamViaClients(
+    private func resolvePlayerStream(
         videoId: String,
-        clients: [MetroLiteStreamClient],
+        clients: [MetroLite12Client],
         index: Int,
         completion: @escaping (URL?) -> Void
     ) {
@@ -430,7 +426,7 @@ final class IPodStreamingLibrary {
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 8.0
+        request.timeoutInterval = 10.0
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
@@ -442,36 +438,38 @@ final class IPodStreamingLibrary {
                   let http = response as? HTTPURLResponse,
                   http.statusCode == 200,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                self.resolveStreamViaClients(videoId: videoId, clients: clients, index: index + 1, completion: completion)
+                self.resolvePlayerStream(videoId: videoId, clients: clients, index: index + 1, completion: completion)
                 return
             }
 
-            if let playability = json["playabilityStatus"] as? [String: Any],
-               let status = playability["status"] as? String,
-               status.uppercased().contains("LOGIN_REQUIRED") {
-                self.resolveStreamViaClients(videoId: videoId, clients: clients, index: index + 1, completion: completion)
-                return
+            if let statusObj = json["playabilityStatus"] as? [String: Any],
+               let status = statusObj["status"] as? String {
+                let upper = status.uppercased()
+                if upper.contains("LOGIN_REQUIRED") || upper.contains("ERROR") || upper.contains("UNPLAYABLE") {
+                    self.resolvePlayerStream(videoId: videoId, clients: clients, index: index + 1, completion: completion)
+                    return
+                }
             }
 
-            if let audioURL = self.extractDirectAudioURL(from: json) {
-                completion(audioURL)
+            if let streamURL = self.extractAudioStreamURL(from: json) {
+                completion(streamURL)
             } else {
-                self.resolveStreamViaClients(videoId: videoId, clients: clients, index: index + 1, completion: completion)
+                self.resolvePlayerStream(videoId: videoId, clients: clients, index: index + 1, completion: completion)
             }
         }.resume()
     }
 
-    private func extractDirectAudioURL(from playerJSON: [String: Any]) -> URL? {
+    private func extractAudioStreamURL(from playerJSON: [String: Any]) -> URL? {
         guard let streamingData = playerJSON["streamingData"] as? [String: Any] else { return nil }
-        let adaptiveFormats = streamingData["adaptiveFormats"] as? [[String: Any]] ?? []
-        let formats = streamingData["formats"] as? [[String: Any]] ?? []
+        let adaptive = streamingData["adaptiveFormats"] as? [[String: Any]] ?? []
+        let standard = streamingData["formats"] as? [[String: Any]] ?? []
 
-        let audioCandidates = adaptiveFormats.filter { fmt in
+        let audioFormats = adaptive.filter { fmt in
             let mime = (fmt["mimeType"] as? String ?? "").lowercased()
-            return (mime.contains("audio/mp4") || mime.contains("audio/mpeg")) && fmt["url"] != nil
+            return mime.contains("audio/mp4") || mime.contains("audio/")
         }
 
-        let sortedAudio = audioCandidates.sorted {
+        let sortedAudio = audioFormats.sorted {
             let b1 = $0["bitrate"] as? Int ?? 0
             let b2 = $1["bitrate"] as? Int ?? 0
             return b1 > b2
@@ -483,7 +481,7 @@ final class IPodStreamingLibrary {
             }
         }
 
-        for fmt in formats {
+        for fmt in standard {
             if let urlStr = fmt["url"] as? String, let url = URL(string: urlStr) {
                 return url
             }
@@ -492,92 +490,93 @@ final class IPodStreamingLibrary {
         return nil
     }
 
-    private func loadSongsCatalog(reshuffle: Bool = false) {
-        let songs: [(title: String, artist: String, album: String, duration: TimeInterval)] = [
-            ("Hati-Hati di Jalan", "Tulus", "Manusia", 262),
-            ("Monokrom", "Tulus", "Monokrom", 213),
-            ("Bertaut", "Nadin Amizah", "Selamat Ulang Tahun", 295),
-            ("Sorai", "Nadin Amizah", "Kalah Bertaruh", 244),
-            ("Komang", "Raim Laode", "Komang", 222),
-            ("Sial", "Mahalini", "Fabula", 240),
-            ("Rewrite The Stars", "Anne-Marie & James Arthur", "The Greatest Showman", 218),
-            ("Shape of You", "Ed Sheeran", "Divide", 233),
-            ("Blinding Lights", "The Weeknd", "After Hours", 200),
-            ("As It Was", "Harry Styles", "Harry's House", 167),
-            ("Lathi", "Weird Genius ft. Sara Fajira", "Lathi", 184),
-            ("Runtuh", "Feby Putri ft. Fiersa Besari", "Riuh", 252),
-            ("Cukup", "Ziva Magnolya", "Magnolya", 241),
-            ("Glimpse of Us", "Joji", "SMITHEREENS", 233),
-            ("Snooze", "SZA", "SOS", 201),
-            ("Cruel Summer", "Taylor Swift", "Lover", 178),
-            ("About You", "The 1975", "Being Funny", 326)
-        ]
-
-        var list: [IPodTrack] = []
-        for idx in 0..<100 {
-            let s = songs[idx % songs.count]
-            let title = idx < songs.count ? s.title : "\(s.title) (\(idx / songs.count + 1))"
-            let art = makeLowResArtwork(title: title, artist: s.artist, tag: "Song")
-            let streamURL = URL(string: verifiedAudioStreams[idx % verifiedAudioStreams.count])
-            list.append(makeTrack(
-                id: "track_\(idx)_\(s.title)",
-                title: title,
-                artist: s.artist,
-                album: s.album,
-                duration: s.duration,
-                assetURL: streamURL,
-                artworkImage: art
-            ))
+    private func resolveFromMobileWatchPage(videoId: String, completion: @escaping (URL?) -> Void) {
+        guard let url = URL(string: "https://m.youtube.com/watch?v=\(videoId)") else {
+            completion(nil)
+            return
         }
-        allStreamingTracks = reshuffle ? list.shuffled() : list
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10.0
+        request.setValue(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1.2 Mobile/15E148 Safari/604.1",
+            forHTTPHeaderField: "User-Agent"
+        )
+
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            guard let data = data, let html = String(data: data, encoding: .utf8) else {
+                completion(nil)
+                return
+            }
+            let pattern = #"https?://[^"\\\s]+mime=audio[^"\\\s]+"#
+            if let regex = try? NSRegularExpression(pattern: pattern),
+               let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+               let range = Range(match.range, in: html) {
+                let decoded = String(html[range])
+                    .replacingOccurrences(of: "\\u0026", with: "&")
+                    .replacingOccurrences(of: "\\/", with: "/")
+                completion(URL(string: decoded))
+                return
+            }
+            completion(nil)
+        }.resume()
     }
 
-    private func makeLowResArtwork(title: String, artist: String, tag: String) -> UIImage? {
-        let key = "\(artist)_\(tag)"
-        if let cached = artworkCache[key] {
+    private func loadLowResThumbnailsAsync(for tracks: [IPodTrack]) {
+        for (idx, track) in tracks.enumerated() {
+            guard let thumbStr = thumbnailURLByTrackId[track.id],
+                  let url = URL(string: thumbStr) else { continue }
+            if let cached = artworkCache[thumbStr] {
+                allStreamingTracks[idx].artworkImage = cached
+                continue
+            }
+            URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+                guard let self = self, let data = data, let rawImg = UIImage(data: data) else { return }
+                let lowRes = self.downsampleImage(rawImg, targetSide: 96)
+                self.artworkCache[thumbStr] = lowRes
+                DispatchQueue.main.async {
+                    if self.allStreamingTracks.indices.contains(idx),
+                       self.allStreamingTracks[idx].id == track.id {
+                        self.allStreamingTracks[idx].artworkImage = lowRes
+                    }
+                }
+            }.resume()
+        }
+    }
+
+    private func downsampleImage(_ image: UIImage, targetSide: CGFloat) -> UIImage {
+        let size = CGSize(width: targetSide, height: targetSide)
+        UIGraphicsBeginImageContextWithOptions(size, true, 1.0)
+        defer { UIGraphicsEndImageContext() }
+        image.draw(in: CGRect(origin: .zero, size: size))
+        return UIGraphicsGetImageFromCurrentImageContext() ?? image
+    }
+
+    private func placeholderArtwork(seed: String) -> UIImage? {
+        if let cached = artworkCache[seed] {
             return cached
         }
-
-        let hash = abs(key.hashValue)
-        let hue = CGFloat(hash % 360) / 360.0
-        let bgColor = UIColor(hue: hue, saturation: 0.56, brightness: 0.34, alpha: 1.0)
-        let accentColor = UIColor(hue: fmod(hue + 0.16, 1.0), saturation: 0.70, brightness: 0.76, alpha: 1.0)
-
+        let hue = CGFloat(abs(seed.hashValue) % 360) / 360.0
         let size = CGSize(width: 96, height: 96)
         UIGraphicsBeginImageContextWithOptions(size, true, 1.0)
         defer { UIGraphicsEndImageContext() }
 
-        bgColor.setFill()
+        UIColor(hue: hue, saturation: 0.50, brightness: 0.28, alpha: 1.0).setFill()
         UIRectFill(CGRect(origin: .zero, size: size))
 
-        accentColor.withAlphaComponent(0.30).setFill()
-        UIBezierPath(ovalIn: CGRect(x: -10, y: -10, width: 68, height: 68)).fill()
-
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: 28, weight: .bold),
+            .font: UIFont.systemFont(ofSize: 30, weight: .bold),
             .foregroundColor: UIColor.white
         ]
-        let glyph = "♪"
-        let gSize = glyph.size(withAttributes: attrs)
-        glyph.draw(
-            at: CGPoint(x: (size.width - gSize.width) / 2.0, y: (size.height - gSize.height) / 2.0 - 5),
+        let note = "♪"
+        let nSize = note.size(withAttributes: attrs)
+        note.draw(
+            at: CGPoint(x: (size.width - nSize.width) / 2.0, y: (size.height - nSize.height) / 2.0),
             withAttributes: attrs
-        )
-
-        let tagAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: 8.5, weight: .semibold),
-            .foregroundColor: UIColor.white.withAlphaComponent(0.88)
-        ]
-        let label = tag.uppercased()
-        let lSize = label.size(withAttributes: tagAttrs)
-        label.draw(
-            at: CGPoint(x: (size.width - lSize.width) / 2.0, y: size.height - lSize.height - 7),
-            withAttributes: tagAttrs
         )
 
         let img = UIGraphicsGetImageFromCurrentImageContext()
         if let img = img {
-            artworkCache[key] = img
+            artworkCache[seed] = img
         }
         return img
     }
