@@ -229,7 +229,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             ambientGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             ambientGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
-            mirrorContainerView.topAnchor.constraint(equalTo: screenView.bottomAnchor, constant: -8),
+            mirrorContainerView.topAnchor.constraint(equalTo: screenView.bottomAnchor, constant: -10),
             mirrorContainerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             mirrorContainerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             mirrorContainerView.bottomAnchor.constraint(equalTo: clickWheel.centerYAnchor, constant: 14),
@@ -286,19 +286,19 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         defer { UIGraphicsEndImageContext() }
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        let outerHaloLeft = min(0.10, 2.0 / w)
-        let lcdSideLeft = min(0.15, 13.0 / w)
-        let flatEdgeLeft = min(0.22, 22.0 / w) // 14pt LCD margin + 8pt cornerRadius
-        let flatEdgeRight = max(0.78, (w - 22.0) / w)
-        let lcdSideRight = max(0.85, (w - 13.0) / w)
-        let outerHaloRight = max(0.90, (w - 2.0) / w)
+        let outerHaloLeft: CGFloat = 0.0
+        let lcdSideLeft = min(0.08, 7.0 / w)
+        let flatEdgeLeft = min(0.15, 14.0 / w) // exact LCD leading edge
+        let flatEdgeRight = max(0.85, (w - 14.0) / w) // exact LCD trailing edge
+        let lcdSideRight = max(0.92, (w - 7.0) / w)
+        let outerHaloRight: CGFloat = 1.0
 
         let hColors = [
             UIColor.white.withAlphaComponent(0.0).cgColor,
-            UIColor.white.withAlphaComponent(0.42).cgColor,
+            UIColor.white.withAlphaComponent(0.48).cgColor,
             UIColor.white.withAlphaComponent(1.0).cgColor,
             UIColor.white.withAlphaComponent(1.0).cgColor,
-            UIColor.white.withAlphaComponent(0.42).cgColor,
+            UIColor.white.withAlphaComponent(0.48).cgColor,
             UIColor.white.withAlphaComponent(0.0).cgColor
         ] as CFArray
         let hLocations: [CGFloat] = [outerHaloLeft, lcdSideLeft, flatEdgeLeft, flatEdgeRight, lcdSideRight, outerHaloRight]
@@ -313,13 +313,17 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         ctx.setBlendMode(.destinationIn)
+        let topLcdEdge = min(0.12, 10.0 / h)
+        let topPeak = min(0.28, 28.0 / h)
         let vColors = [
-            UIColor.white.withAlphaComponent(0.92).cgColor,
-            UIColor.white.withAlphaComponent(0.54).cgColor,
-            UIColor.white.withAlphaComponent(0.18).cgColor,
+            UIColor.white.withAlphaComponent(0.0).cgColor,
+            UIColor.white.withAlphaComponent(0.28).cgColor,
+            UIColor.white.withAlphaComponent(0.88).cgColor,
+            UIColor.white.withAlphaComponent(0.40).cgColor,
+            UIColor.white.withAlphaComponent(0.10).cgColor,
             UIColor.white.withAlphaComponent(0.0).cgColor
         ] as CFArray
-        let vLocations: [CGFloat] = [0.0, 0.25, 0.62, 1.0]
+        let vLocations: [CGFloat] = [0.0, topLcdEdge, topPeak, 0.56, 0.85, 1.0]
 
         if let vGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: vColors, locations: vLocations) {
             ctx.drawLinearGradient(
