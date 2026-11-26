@@ -2,26 +2,49 @@ import Foundation
 import UIKit
 import MediaPlayer
 
+struct IPodResolvedStream {
+    let url: URL
+    let userAgent: String
+    let duration: TimeInterval?
+    let fallbackCandidates: [(url: URL, userAgent: String)]
+}
+
 enum IPodStreamResolutionResult {
-    case playable(URL)
+    case playable(IPodResolvedStream)
     case failed(reason: String)
 }
 
 private enum InnerTubeClient {
+    case ios
+    case android
     case iosMusic
     case webRemix
     case mweb
 
     var clientName: String {
         switch self {
+        case .ios:      return "IOS"
+        case .android:  return "ANDROID"
         case .iosMusic: return "IOS_MUSIC"
         case .webRemix: return "WEB_REMIX"
         case .mweb:     return "MWEB"
         }
     }
 
+    var clientId: String {
+        switch self {
+        case .ios:      return "5"
+        case .android:  return "3"
+        case .iosMusic: return "26"
+        case .webRemix: return "67"
+        case .mweb:     return "2"
+        }
+    }
+
     var clientVersion: String {
         switch self {
+        case .ios:      return "20.10.4"
+        case .android:  return "20.10.38"
         case .iosMusic: return "7.29.3"
         case .webRemix: return "1.20260707.12.00"
         case .mweb:     return "2.20260501.01.00"
@@ -30,6 +53,10 @@ private enum InnerTubeClient {
 
     var userAgent: String {
         switch self {
+        case .ios:
+            return "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)"
+        case .android:
+            return "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip"
         case .iosMusic:
             return "com.google.ios.youtubemusic/7.29.3 (iPhone; U; CPU iPhone OS 12_5_8 like Mac OS X; en_US)"
         case .webRemix:
@@ -37,6 +64,32 @@ private enum InnerTubeClient {
         case .mweb:
             return "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1.2 Mobile/15E148 Safari/604.1"
         }
+    }
+
+    func clientContext(visitorData: String?) -> [String: Any] {
+        var ctx: [String: Any] = [
+            "clientName": clientName,
+            "clientVersion": clientVersion,
+            "hl": "id",
+            "gl": "ID"
+        ]
+        if let vd = visitorData, !vd.isEmpty {
+            ctx["visitorData"] = vd
+        }
+        switch self {
+        case .ios:
+            ctx["deviceMake"] = "Apple"
+            ctx["deviceModel"] = "iPhone16,2"
+            ctx["osName"] = "iPhone"
+            ctx["osVersion"] = "18.3.2.22D82"
+        case .android:
+            ctx["osName"] = "Android"
+            ctx["osVersion"] = "11"
+            ctx["androidSdkVersion"] = 30
+        default:
+            break
+        }
+        return ctx
     }
 }
 
@@ -47,8 +100,9 @@ final class IPodStreamingLibrary {
     private(set) var allStreamingTracks: [IPodTrack] = []
     private var videoIdByTrackId: [String: String] = [:]
     private var thumbnailURLByTrackId: [String: String] = [:]
-    private var resolvedStreamURLCache: [String: URL] = [:]
+    private var resolvedStreamCache: [String: IPodResolvedStream] = [:]
     private var artworkCache: [String: UIImage] = [:]
+    private var visitorData: String?
 
     private let songQueries = [
         "lagu indonesia populer official audio",
@@ -89,7 +143,7 @@ final class IPodStreamingLibrary {
     }
 
     func invalidateCachedURL(for track: IPodTrack) {
-        resolvedStreamURLCache.removeValue(forKey: track.id)
+        resolvedStreamCache.removeValue(forKey: track.id)
     }
 
     func tracksPage(pageIndex: Int) -> (tracks: [IPodTrack], currentPage: Int, totalPages: Int, hasNextPage: Bool) {
@@ -144,8 +198,8 @@ final class IPodStreamingLibrary {
         return [selectedTrack] + ordered
     }
 
-    func resolvePlayableAudio(for track: IPodTrack, forceRefresh: Bool = false, completion: @escaping (IPodStreamResolutionResult) -> Void) {
-        if !forceRefresh, let cached = resolvedStreamURLCache[track.id] {
+    func resolvePlayableAudio(for track: IPodTrack, forceRefresh: Bool = false, preferAndroidFallback: Bool = false, completion: @escaping (IPodStreamResolutionResult) -> Void) {
+        if !forceRefresh && !preferAndroidFallback, let cached = resolvedStreamCache[track.id] {
             completion(.playable(cached))
             return
         }
@@ -155,19 +209,21 @@ final class IPodStreamingLibrary {
             return
         }
 
-        let clients: [InnerTubeClient] = [.webRemix, .mweb, .iosMusic]
+        let clients: [InnerTubeClient] = preferAndroidFallback
+            ? [.android, .ios, .iosMusic]
+            : [.ios, .android, .iosMusic]
         resolvePlayerStream(videoId: videoId, clients: clients, index: 0, lastErrorReason: "No Direct Audio URL") { [weak self] result in
             switch result {
-            case .playable(let url):
-                self?.resolvedStreamURLCache[track.id] = url
-                DispatchQueue.main.async { completion(.playable(url)) }
+            case .playable(let stream):
+                self?.resolvedStreamCache[track.id] = stream
+                DispatchQueue.main.async { completion(.playable(stream)) }
 
             case .failed(let playerReason):
                 self?.resolveFromMobileWatchPage(videoId: videoId) { watchResult in
                     switch watchResult {
-                    case .playable(let wURL):
-                        self?.resolvedStreamURLCache[track.id] = wURL
-                        DispatchQueue.main.async { completion(.playable(wURL)) }
+                    case .playable(let wStream):
+                        self?.resolvedStreamCache[track.id] = wStream
+                        DispatchQueue.main.async { completion(.playable(wStream)) }
                     case .failed(let watchReason):
                         DispatchQueue.main.async {
                             completion(.failed(reason: "\(playerReason) | \(watchReason)"))
@@ -249,12 +305,7 @@ final class IPodStreamingLibrary {
 
         let body: [String: Any] = [
             "context": [
-                "client": [
-                    "clientName": client.clientName,
-                    "clientVersion": client.clientVersion,
-                    "hl": "id",
-                    "gl": "ID"
-                ]
+                "client": client.clientContext(visitorData: visitorData)
             ],
             "query": query
         ]
@@ -264,6 +315,8 @@ final class IPodStreamingLibrary {
         request.timeoutInterval = 10.0
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(client.clientId, forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(client.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
@@ -275,6 +328,11 @@ final class IPodStreamingLibrary {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 self.searchInnerTube(query: query, clients: clients, index: index + 1, completion: completion)
                 return
+            }
+
+            if let respCtx = json["responseContext"] as? [String: Any],
+               let vd = respCtx["visitorData"] as? String, !vd.isEmpty {
+                self.visitorData = vd
             }
 
             let parsed = self.parseSongsFromSearchJSON(json)
@@ -435,12 +493,7 @@ final class IPodStreamingLibrary {
 
         let payload: [String: Any] = [
             "context": [
-                "client": [
-                    "clientName": client.clientName,
-                    "clientVersion": client.clientVersion,
-                    "hl": "id",
-                    "gl": "ID"
-                ]
+                "client": client.clientContext(visitorData: visitorData)
             ],
             "videoId": videoId,
             "contentCheckOk": true,
@@ -452,6 +505,8 @@ final class IPodStreamingLibrary {
         request.timeoutInterval = 10.0
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(client.clientId, forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(client.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
@@ -490,10 +545,10 @@ final class IPodStreamingLibrary {
                 return
             }
 
-            let extraction = self.extractAudioStreamURL(from: json)
+            let extraction = self.extractAudioStream(from: json, client: client)
             switch extraction {
-            case .playable(let url):
-                completion(.playable(url))
+            case .playable(let stream):
+                completion(.playable(stream))
             case .failed(let reason):
                 let statusObj = json["playabilityStatus"] as? [String: Any]
                 let detail = statusObj?["reason"] as? String
@@ -509,73 +564,72 @@ final class IPodStreamingLibrary {
         }.resume()
     }
 
-    private func extractURLFromCipher(_ cipherString: String) -> URL? {
-        var extractedURL: String?
-        var signatureParam: String?
-        var spParam: String = "sig"
-
-        for part in cipherString.components(separatedBy: "&") {
-            let kv = part.components(separatedBy: "=")
-            guard kv.count == 2 else { continue }
-            let key = kv[0]
-            let val = kv[1].removingPercentEncoding ?? kv[1]
-            if key == "url" {
-                extractedURL = val
-            } else if key == "s" {
-                signatureParam = val
-            } else if key == "sp" && !val.isEmpty {
-                spParam = val
-            }
-        }
-
-        guard let baseStr = extractedURL, var comps = URLComponents(string: baseStr) else { return nil }
-        if let sig = signatureParam, !sig.isEmpty {
-            var items = comps.queryItems ?? []
-            items.append(URLQueryItem(name: spParam, value: sig))
-            comps.queryItems = items
-        }
-        return comps.url
-    }
-
-    private func extractAudioStreamURL(from playerJSON: [String: Any]) -> IPodStreamResolutionResult {
+    private func extractAudioStream(from playerJSON: [String: Any], client: InnerTubeClient) -> IPodStreamResolutionResult {
         guard let streamingData = playerJSON["streamingData"] as? [String: Any] else {
             return .failed(reason: "Missing streamingData")
         }
+
+        var durationSec: TimeInterval? = nil
+        if let details = playerJSON["videoDetails"] as? [String: Any],
+           let lenStr = details["lengthSeconds"] as? String,
+           let parsed = Double(lenStr), parsed > 0 {
+            durationSec = parsed
+        }
+
         let adaptive = streamingData["adaptiveFormats"] as? [[String: Any]] ?? []
         let standard = streamingData["formats"] as? [[String: Any]] ?? []
 
-        let audioFormats = adaptive.filter { fmt in
+        // AVPlayer on iOS supports AAC in MP4 (audio/mp4) and HLS; WebM/Opus fails to decode.
+        let mp4AudioFormats = adaptive.filter { fmt in
             let mime = (fmt["mimeType"] as? String ?? "").lowercased()
-            return mime.contains("audio/mp4") || mime.contains("audio/")
-        }
-
-        let sortedAudio = audioFormats.sorted {
+            return mime.contains("audio/mp4") && (fmt["url"] as? String)?.isEmpty == false
+        }.sorted {
             let b1 = $0["bitrate"] as? Int ?? 0
             let b2 = $1["bitrate"] as? Int ?? 0
             return b1 > b2
         }
 
-        for fmt in sortedAudio {
-            if let urlStr = fmt["url"] as? String, let url = URL(string: urlStr) {
-                return .playable(url)
-            }
-            if let cipher = (fmt["signatureCipher"] as? String) ?? (fmt["cipher"] as? String),
-               let cipherURL = extractURLFromCipher(cipher) {
-                return .playable(cipherURL)
+        var candidates: [(url: URL, userAgent: String)] = []
+        var seenURLs = Set<String>()
+
+        func appendCandidate(_ urlStr: String?) {
+            guard let s = urlStr, !s.isEmpty, !seenURLs.contains(s), let u = URL(string: s) else { return }
+            seenURLs.insert(s)
+            candidates.append((url: u, userAgent: client.userAgent))
+        }
+
+        for fmt in mp4AudioFormats {
+            appendCandidate(fmt["url"] as? String)
+            if durationSec == nil,
+               let msStr = fmt["approxDurationMs"] as? String,
+               let ms = Double(msStr), ms > 0 {
+                durationSec = ms / 1000.0
             }
         }
 
-        for fmt in standard {
-            if let urlStr = fmt["url"] as? String, let url = URL(string: urlStr) {
-                return .playable(url)
-            }
-            if let cipher = (fmt["signatureCipher"] as? String) ?? (fmt["cipher"] as? String),
-               let cipherURL = extractURLFromCipher(cipher) {
-                return .playable(cipherURL)
-            }
+        if let hlsStr = streamingData["hlsManifestUrl"] as? String {
+            appendCandidate(hlsStr)
         }
 
-        return .failed(reason: "No Playable Audio URL")
+        let mp4Standard = standard.filter { fmt in
+            let mime = (fmt["mimeType"] as? String ?? "").lowercased()
+            return mime.contains("video/mp4") || mime.contains("audio/mp4")
+        }
+        for fmt in mp4Standard {
+            appendCandidate(fmt["url"] as? String)
+        }
+
+        guard let primary = candidates.first else {
+            return .failed(reason: "No AVPlayer-compatible audio/mp4 URL")
+        }
+
+        let stream = IPodResolvedStream(
+            url: primary.url,
+            userAgent: primary.userAgent,
+            duration: durationSec,
+            fallbackCandidates: Array(candidates.dropFirst())
+        )
+        return .playable(stream)
     }
 
     private func resolveFromMobileWatchPage(videoId: String, completion: @escaping (IPodStreamResolutionResult) -> Void) {
@@ -583,12 +637,10 @@ final class IPodStreamingLibrary {
             completion(.failed(reason: "Watch URL Invalid"))
             return
         }
+        let ua = InnerTubeClient.mweb.userAgent
         var request = URLRequest(url: url)
         request.timeoutInterval = 10.0
-        request.setValue(
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1.2 Mobile/15E148 Safari/604.1",
-            forHTTPHeaderField: "User-Agent"
-        )
+        request.setValue(ua, forHTTPHeaderField: "User-Agent")
 
         URLSession.shared.dataTask(with: request) { data, response, error in
             if let err = error {
@@ -601,8 +653,8 @@ final class IPodStreamingLibrary {
                 return
             }
             let patterns = [
-                #"https?://[^"\\\s]+mime=audio[^"\\\s]+"#,
-                #"https?://[^"\\\s]+googlevideo\.com/videoplayback[^"\\\s]+"#
+                #"https?://[^"\\\s]+mime=audio%2Fmp4[^"\\\s]+"#,
+                #"https?://[^"\\\s]+mime=audio/mp4[^"\\\s]+"#
             ]
             for pat in patterns {
                 if let regex = try? NSRegularExpression(pattern: pat),
@@ -612,7 +664,13 @@ final class IPodStreamingLibrary {
                         .replacingOccurrences(of: "\\u0026", with: "&")
                         .replacingOccurrences(of: "\\/", with: "/")
                     if let audioURL = URL(string: decoded) {
-                        completion(.playable(audioURL))
+                        let stream = IPodResolvedStream(
+                            url: audioURL,
+                            userAgent: ua,
+                            duration: nil,
+                            fallbackCandidates: []
+                        )
+                        completion(.playable(stream))
                         return
                     }
                 }
