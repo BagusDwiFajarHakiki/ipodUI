@@ -102,7 +102,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
-            // Lebar kiri & kanan disamakan persis dengan pendaran sekeliling LCD, dan memanjang ke bawah
             lcdEdgeGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -36),
             lcdEdgeGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: 24),
             lcdEdgeGlowImageView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor, constant: -36),
@@ -123,7 +122,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        // 1. Pendaran tipis dan merata di sekeliling tepi LCD (atas, kiri, kanan, bawah)
+        // 1. Pendaran merata di sekeliling tepi LCD (atas, kiri, kanan, bawah)
         let surroundFeather: CGFloat = 34.0
         let surroundSteps = 28
         for i in 0..<surroundSteps {
@@ -158,7 +157,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             }
         }
 
-        // Mask pudar lembut di bagian bawah kanvas agar memudar alami ke bawah
+        // 3. Mask vertikal & horizontal agar sisi kiri, kanan, dan bawah memudar lembut menyatu ke bodi
         ctx.setBlendMode(.destinationIn)
         let maskWidth = canvasSize.width
         let maskHeight = canvasSize.height
@@ -174,6 +173,24 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 vGrad,
                 start: CGPoint(x: maskWidth * 0.5, y: 0),
                 end: CGPoint(x: maskWidth * 0.5, y: maskHeight),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+        }
+
+        let hColors = [
+            UIColor.white.withAlphaComponent(0.0).cgColor,
+            UIColor.white.withAlphaComponent(0.55).cgColor,
+            UIColor.white.withAlphaComponent(1.0).cgColor,
+            UIColor.white.withAlphaComponent(1.0).cgColor,
+            UIColor.white.withAlphaComponent(0.55).cgColor,
+            UIColor.white.withAlphaComponent(0.0).cgColor
+        ] as CFArray
+        let hLocations: [CGFloat] = [0.0, 0.14, 0.28, 0.72, 0.86, 1.0]
+        if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
+            ctx.drawLinearGradient(
+                hGrad,
+                start: CGPoint(x: 0, y: maskHeight * 0.5),
+                end: CGPoint(x: maskWidth, y: maskHeight * 0.5),
                 options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
             )
         }
