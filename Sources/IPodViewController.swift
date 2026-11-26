@@ -149,11 +149,15 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         let glowSize = ambientGlowImageView.bounds.size
         let screenFrameInGlow = screenView.convert(screenView.bounds, to: ambientGlowImageView)
-        if glowSize.width > 0, glowSize.height > 0, screenFrameInGlow.width > 0, glowSize != lastGlowSize {
+        let wheelFrameInGlow = clickWheel.convert(clickWheel.bounds, to: ambientGlowImageView)
+        if glowSize.width > 0, glowSize.height > 0,
+           screenFrameInGlow.width > 0, wheelFrameInGlow.width > 0,
+           glowSize != lastGlowSize {
             lastGlowSize = glowSize
             ambientGlowImageView.image = makeSmoothLcdAmbientImage(
                 canvasSize: glowSize,
-                lcdRect: screenFrameInGlow
+                lcdRect: screenFrameInGlow,
+                wheelRect: wheelFrameInGlow
             )
         }
     }
@@ -181,10 +185,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
-            ambientGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -36),
-            ambientGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: 32),
-            ambientGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -36),
-            ambientGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 36),
+            ambientGlowImageView.topAnchor.constraint(equalTo: view.topAnchor),
+            ambientGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            ambientGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            ambientGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
             clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -44),
             clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -193,9 +197,43 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         ])
     }
 
+    private func drawEllipticalGlow(
+        in ctx: CGContext,
+        center: CGPoint,
+        rx: CGFloat,
+        ry: CGFloat,
+        peakAlpha: CGFloat
+    ) {
+        guard rx > 1, ry > 1 else { return }
+        let colors = [
+            UIColor.white.withAlphaComponent(peakAlpha).cgColor,
+            UIColor.white.withAlphaComponent(peakAlpha * 0.72).cgColor,
+            UIColor.white.withAlphaComponent(peakAlpha * 0.38).cgColor,
+            UIColor.white.withAlphaComponent(peakAlpha * 0.14).cgColor,
+            UIColor.white.withAlphaComponent(peakAlpha * 0.03).cgColor,
+            UIColor.white.withAlphaComponent(0.0).cgColor
+        ] as CFArray
+        let locations: [CGFloat] = [0.0, 0.24, 0.48, 0.70, 0.88, 1.0]
+        guard let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: locations) else { return }
+
+        ctx.saveGState()
+        ctx.translateBy(x: center.x, y: center.y)
+        ctx.scaleBy(x: rx, y: ry)
+        ctx.drawRadialGradient(
+            grad,
+            startCenter: .zero,
+            startRadius: 0.0,
+            endCenter: .zero,
+            endRadius: 1.0,
+            options: [.drawsAfterEndLocation]
+        )
+        ctx.restoreGState()
+    }
+
     private func makeSmoothLcdAmbientImage(
         canvasSize: CGSize,
-        lcdRect: CGRect
+        lcdRect: CGRect,
+        wheelRect: CGRect
     ) -> UIImage? {
         let w = canvasSize.width
         let h = canvasSize.height
@@ -204,54 +242,36 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        ctx.setFillColor(UIColor.white.withAlphaComponent(0.30).cgColor)
-        ctx.fill(CGRect(origin: .zero, size: canvasSize))
+        // 1. Subtle soft aura tucked behind the LCD screen
+        drawEllipticalGlow(
+            in: ctx,
+            center: CGPoint(x: lcdRect.midX, y: lcdRect.midY + lcdRect.height * 0.14),
+            rx: lcdRect.width * 0.60,
+            ry: lcdRect.height * 0.72,
+            peakAlpha: 0.20
+        )
 
-        ctx.setBlendMode(.destinationIn)
-        let leftSoft = max(0.0, min(0.45, (lcdRect.minX - 24.0) / w))
-        let leftFull = max(leftSoft + 0.05, min(0.48, (lcdRect.minX + 6.0) / w))
-        let rightFull = max(0.52, min(0.95, (lcdRect.maxX - 6.0) / w))
-        let rightSoft = max(rightFull + 0.05, min(1.0, (lcdRect.maxX + 24.0) / w))
+        // 2. Main soft glow emerging from behind the lower LCD edge
+        let upperCenterY = lcdRect.maxY - lcdRect.height * 0.06
+        let upperReachY = max(120.0, wheelRect.midY - upperCenterY)
+        drawEllipticalGlow(
+            in: ctx,
+            center: CGPoint(x: lcdRect.midX, y: upperCenterY),
+            rx: lcdRect.width * 0.54,
+            ry: upperReachY,
+            peakAlpha: 0.28
+        )
 
-        let hColors = [
-            UIColor.white.withAlphaComponent(0.0).cgColor,
-            UIColor.white.withAlphaComponent(0.65).cgColor,
-            UIColor.white.withAlphaComponent(1.0).cgColor,
-            UIColor.white.withAlphaComponent(1.0).cgColor,
-            UIColor.white.withAlphaComponent(0.65).cgColor,
-            UIColor.white.withAlphaComponent(0.0).cgColor
-        ] as CFArray
-        let hLocations: [CGFloat] = [0.0, leftSoft, leftFull, rightFull, rightSoft, 1.0]
-
-        if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
-            ctx.drawLinearGradient(
-                hGrad,
-                start: CGPoint(x: 0, y: h * 0.5),
-                end: CGPoint(x: w, y: h * 0.5),
-                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
-            )
-        }
-
-        let topFadeEnd = max(0.04, min(0.28, (lcdRect.minY + 12.0) / h))
-        let bottomFadeStart = max(topFadeEnd + 0.10, min(0.88, (lcdRect.maxY + (h - lcdRect.maxY) * 0.55) / h))
-
-        let vColors = [
-            UIColor.white.withAlphaComponent(0.0).cgColor,
-            UIColor.white.withAlphaComponent(0.85).cgColor,
-            UIColor.white.withAlphaComponent(1.0).cgColor,
-            UIColor.white.withAlphaComponent(0.75).cgColor,
-            UIColor.white.withAlphaComponent(0.0).cgColor
-        ] as CFArray
-        let vLocations: [CGFloat] = [0.0, topFadeEnd, max(topFadeEnd + 0.04, lcdRect.maxY / h), bottomFadeStart, 1.0]
-
-        if let vGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: vColors, locations: vLocations) {
-            ctx.drawLinearGradient(
-                vGrad,
-                start: CGPoint(x: w * 0.5, y: 0),
-                end: CGPoint(x: w * 0.5, y: h),
-                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
-            )
-        }
+        // 3. Wider downward diffusion enveloping the gap and scroll wheel area
+        let lowerCenterY = (lcdRect.maxY + wheelRect.midY) * 0.50
+        let lowerReachY = max(140.0, (wheelRect.maxY + 18.0) - lowerCenterY)
+        drawEllipticalGlow(
+            in: ctx,
+            center: CGPoint(x: wheelRect.midX, y: lowerCenterY),
+            rx: w * 0.64,
+            ry: lowerReachY,
+            peakAlpha: 0.24
+        )
 
         let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
         UIGraphicsEndImageContext()
@@ -332,7 +352,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         let avgColor = UIColor(red: rTotal / count, green: gTotal / count, blue: bTotal / count, alpha: 1.0)
         var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         if avgColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
-            return UIColor(hue: h, saturation: min(1.0, max(s * 1.35, 0.35)), brightness: min(1.0, max(b * 1.18, 0.58)), alpha: 1.0)
+            return UIColor(hue: h, saturation: min(0.78, max(s * 1.15, 0.24)), brightness: min(0.92, max(b * 1.18, 0.66)), alpha: 1.0)
         }
         return avgColor
     }

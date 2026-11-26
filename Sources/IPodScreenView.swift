@@ -15,7 +15,7 @@ enum IPodColorTheme: CaseIterable {
 
     var screenBackground: UIColor {
         switch self {
-        case .darkPod:     return UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 0.96)
+        case .darkPod:     return UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 0.92)
         case .sepiaPod:    return UIColor(red: 0.96, green: 0.92, blue: 0.83, alpha: 0.96)
         case .classicBlue: return UIColor(red: 0.96, green: 0.97, blue: 0.99, alpha: 0.96)
         }
