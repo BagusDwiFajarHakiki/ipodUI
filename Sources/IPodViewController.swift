@@ -785,14 +785,20 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 case .playable(let url):
                     self.startAVPlayer(with: url, track: track, resumeFromSeconds: resumeFromSeconds)
                 case .failed(let reason):
-                    self.screenView.showStatusBanner("Gagal Putar: \(reason)")
-                    self.playNextTrack()
+                    if let fallback = track.assetURL ?? IPodStreamingLibrary.shared.defaultFallbackURL(for: track.id) {
+                        self.startAVPlayer(with: fallback, track: track, resumeFromSeconds: resumeFromSeconds)
+                    } else {
+                        self.isPlaying = false
+                        self.screenView.updatePlayState(isPlaying: false)
+                        self.screenView.showStatusBanner("Gagal Putar: \(reason)")
+                    }
                 }
             }
             return
         }
 
-        if let url = track.assetURL {
+        let resolvedAssetURL = track.assetURL ?? IPodStreamingLibrary.shared.defaultFallbackURL(for: track.id)
+        if let url = resolvedAssetURL {
             startAVPlayer(with: url, track: track, resumeFromSeconds: resumeFromSeconds)
         } else {
             isPlaying = false
@@ -846,7 +852,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         updateNowPlayingInfo(track: track, elapsed: resumeFromSeconds)
     }
 
-    // Stream Watchdog Tweak: memulihkan pemutaran jika tersangkut / mentok di tengah lagu (seperti detik ke-59)
     private func triggerWatchdogRecovery(for track: IPodTrack, item: AVPlayerItem) {
         guard isPlaying, currentQueue.indices.contains(currentTrackIndex),
               currentQueue[currentTrackIndex].id == track.id else { return }
@@ -944,7 +949,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 self.screenView.updateProgress(elapsed: elapsed, duration: validDur)
                 self.updateNowPlayingInfo(track: track, elapsed: elapsed)
 
-                // Deteksi waktu berhenti/mentok saat sedang memutar (misalnya di detik ke-59)
                 if self.isPlaying && player.rate == 0 && elapsed > 5.0 {
                     if abs(elapsed - self.lastObservedElapsed) < 0.25 {
                         self.stuckTicks += 1
