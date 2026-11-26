@@ -45,14 +45,26 @@ final class IPodStreamingLibrary {
     private var resolvedStreamURLCache: [String: URL] = [:]
     private var artworkCache: [String: UIImage] = [:]
 
-    private let queries = [
-        "pop hits official audio",
-        "indie acoustic song",
-        "synthwave electronic music",
-        "lo fi beats chill song",
-        "rock alternative track"
+    private let songQueries = [
+        "official audio single song",
+        "acoustic guitar song audio",
+        "piano instrumental song audio",
+        "synthwave track official audio",
+        "indie pop song audio"
     ]
     private var queryIndex: Int = 0
+
+    // Aliran MP3 terbuka sebagai cadangan terakhir jika semua stream ekstraksi diblokir/cipher
+    private let directAudioFallbackURLs: [String] = [
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3"
+    ]
 
     private init() {
         fetchSongsFromInnerTube(reshuffle: false) { _ in }
@@ -77,6 +89,11 @@ final class IPodStreamingLibrary {
             mediaItem: nil,
             artworkImage: artworkImage
         )
+    }
+
+    func fallbackAudioURL(for track: IPodTrack) -> URL? {
+        let idx = abs(track.id.hashValue) % directAudioFallbackURLs.count
+        return URL(string: directAudioFallbackURLs[idx])
     }
 
     func refreshTracks(completion: @escaping (Bool) -> Void) {
@@ -141,8 +158,10 @@ final class IPodStreamingLibrary {
             return
         }
 
+        let backupURL = fallbackAudioURL(for: track)
+
         guard let videoId = videoIdByTrackId[track.id], !videoId.isEmpty else {
-            completion(track.assetURL)
+            completion(backupURL)
             return
         }
 
@@ -155,11 +174,12 @@ final class IPodStreamingLibrary {
             }
 
             self?.resolveFromMobileWatchPage(videoId: videoId) { watchStreamURL in
-                if let wURL = watchStreamURL {
-                    self?.resolvedStreamURLCache[track.id] = wURL
+                let finalURL = watchStreamURL ?? backupURL
+                if let fURL = finalURL {
+                    self?.resolvedStreamURLCache[track.id] = fURL
                 }
                 DispatchQueue.main.async {
-                    completion(watchStreamURL)
+                    completion(finalURL)
                 }
             }
         }
@@ -189,16 +209,16 @@ final class IPodStreamingLibrary {
             var thumbMap: [String: String] = [:]
 
             for (idx, entry) in entries.enumerated() {
-                let trackId = "innertube_\(entry.videoId)_\(idx)"
+                let trackId = "song_\(entry.videoId)_\(idx)"
                 let placeholderArt = self.placeholderArtwork(seed: entry.videoId)
-                let watchURL = URL(string: "https://m.youtube.com/watch?v=\(entry.videoId)")
+                let backupURL = URL(string: self.directAudioFallbackURLs[idx % self.directAudioFallbackURLs.count])
                 let track = self.makeTrack(
                     id: trackId,
                     title: entry.title,
                     artist: entry.artist,
                     album: entry.album,
                     duration: 195,
-                    assetURL: watchURL,
+                    assetURL: backupURL,
                     artworkImage: placeholderArt
                 )
                 tracks.append(track)
@@ -273,20 +293,30 @@ final class IPodStreamingLibrary {
         }.resume()
     }
 
+    // Filter ketat: hanya lagu audio tunggal, menolak playlist, episode, podcast, mix, atau kompilasi panjang
     private func parseSongsFromSearchJSON(_ root: Any) -> [InnerTubeSongEntry] {
         var list: [InnerTubeSongEntry] = []
         var seen = Set<String>()
 
-        let excludedWords = ["playlist", "mix", "compilation", "full album", "hour", "24/7", "radio"]
+        let rejectedWords = [
+            "playlist", "episode", "podcast", "ep.", "ep ", "part ", "vol.", "chapter",
+            "mix", "compilation", "full album", "hour", "24/7", "radio", "live", "session", "interview"
+        ]
 
-        func isAllowedSongTitle(_ title: String) -> Bool {
-            let lower = title.lowercased()
-            return !excludedWords.contains { lower.contains($0) }
+        func isPureSongTitle(_ title: String, _ artist: String) -> Bool {
+            let combined = "\(title) \(artist)".lowercased()
+            if rejectedWords.contains(where: { combined.contains($0) }) {
+                return false
+            }
+            return title.count <= 75
         }
 
         func traverse(_ node: Any) {
             if let dict = node as? [String: Any] {
-                if dict["playlistId"] != nil || dict["musicPlaylistRenderer"] != nil || dict["playlistRenderer"] != nil {
+                if dict["playlistId"] != nil
+                    || dict["musicPlaylistRenderer"] != nil
+                    || dict["playlistRenderer"] != nil
+                    || dict["playlistPanelRenderer"] != nil {
                     return
                 }
 
@@ -297,19 +327,20 @@ final class IPodStreamingLibrary {
                         let artist = texts.dropFirst().first ?? "Unknown Artist"
                         let album = texts.dropFirst(2).first ?? "Single"
                         let thumb = extractThumbnailURL(from: musicItem)
-                        if !title.isEmpty && isAllowedSongTitle(title) {
+                        if !title.isEmpty && isPureSongTitle(title, artist) {
                             seen.insert(vid)
                             list.append(InnerTubeSongEntry(videoId: vid, title: title, artist: artist, album: album, thumbnailURL: thumb))
                         }
                     }
                 } else if let vid = dict["videoId"] as? String, !vid.isEmpty, !seen.contains(vid) {
                     if let titleObj = dict["title"] as? [String: Any],
-                       let title = extractText(from: titleObj),
-                       isAllowedSongTitle(title) {
+                       let title = extractText(from: titleObj) {
                         let artist = extractText(from: dict["shortBylineText"] ?? dict["longBylineText"] ?? "") ?? "Unknown Artist"
-                        let thumb = extractThumbnailURL(from: dict)
-                        seen.insert(vid)
-                        list.append(InnerTubeSongEntry(videoId: vid, title: title, artist: artist, album: "Single", thumbnailURL: thumb))
+                        if isPureSongTitle(title, artist) {
+                            let thumb = extractThumbnailURL(from: dict)
+                            seen.insert(vid)
+                            list.append(InnerTubeSongEntry(videoId: vid, title: title, artist: artist, album: "Single", thumbnailURL: thumb))
+                        }
                     }
                 }
 
