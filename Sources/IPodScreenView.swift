@@ -273,6 +273,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let batteryView = UIView()
     private let batteryCapView = UIView()
     private let batteryFill = UIView()
+    private let batteryPercentLabel = UILabel()
+    private var batteryWidthConstraint: NSLayoutConstraint!
     private var clockTimer: Timer?
 
     // Menu List View
@@ -359,8 +361,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         refreshButton.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(refreshButton)
 
+        // Ikon baterai dengan bar pengisian + persentase di dalamnya
         batteryView.layer.borderWidth = 1.2
         batteryView.layer.cornerRadius = 3.5
+        batteryView.clipsToBounds = true
         batteryView.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(batteryView)
 
@@ -371,6 +375,11 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         batteryFill.layer.cornerRadius = 2.0
         batteryFill.translatesAutoresizingMaskIntoConstraints = false
         batteryView.addSubview(batteryFill)
+
+        batteryPercentLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 8.0, weight: .heavy)
+        batteryPercentLabel.textAlignment = .center
+        batteryPercentLabel.translatesAutoresizingMaskIntoConstraints = false
+        batteryView.addSubview(batteryPercentLabel)
 
         // Menu Table
         tableView.dataSource = self
@@ -509,7 +518,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         UIDevice.current.isBatteryMonitoringEnabled = true
         let level = UIDevice.current.batteryLevel
-        let batRatio: CGFloat = level >= 0 ? CGFloat(max(0.18, level)) : 0.85
+        let pctInt = level >= 0 ? Int(round(level * 100.0)) : 85
+        let batRatio = CGFloat(min(max(Double(pctInt) / 100.0, 0.12), 1.0))
+        batteryPercentLabel.text = "\(pctInt)%"
+        batteryWidthConstraint = batteryFill.widthAnchor.constraint(equalTo: batteryView.widthAnchor, multiplier: batRatio, constant: -3.2)
 
         NSLayoutConstraint.activate([
             headerBar.topAnchor.constraint(equalTo: topAnchor),
@@ -532,8 +544,18 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
             batteryView.trailingAnchor.constraint(equalTo: batteryCapView.leadingAnchor, constant: -1.5),
             batteryView.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
-            batteryView.widthAnchor.constraint(equalToConstant: 22),
-            batteryView.heightAnchor.constraint(equalToConstant: 11),
+            batteryView.widthAnchor.constraint(equalToConstant: 30),
+            batteryView.heightAnchor.constraint(equalToConstant: 13),
+
+            batteryFill.topAnchor.constraint(equalTo: batteryView.topAnchor, constant: 1.6),
+            batteryFill.bottomAnchor.constraint(equalTo: batteryView.bottomAnchor, constant: -1.6),
+            batteryFill.leadingAnchor.constraint(equalTo: batteryView.leadingAnchor, constant: 1.6),
+            batteryWidthConstraint,
+
+            batteryPercentLabel.topAnchor.constraint(equalTo: batteryView.topAnchor),
+            batteryPercentLabel.bottomAnchor.constraint(equalTo: batteryView.bottomAnchor),
+            batteryPercentLabel.leadingAnchor.constraint(equalTo: batteryView.leadingAnchor),
+            batteryPercentLabel.trailingAnchor.constraint(equalTo: batteryView.trailingAnchor),
 
             refreshButton.trailingAnchor.constraint(equalTo: batteryView.leadingAnchor, constant: -4),
             refreshButton.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
@@ -632,16 +654,20 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     }
 
     private func startClockTimer() {
-        updateClockText()
+        updateClockAndBattery()
         clockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.updateClockText()
+            self?.updateClockAndBattery()
         }
     }
 
-    private func updateClockText() {
+    private func updateClockAndBattery() {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
         clockLabel.text = formatter.string(from: Date())
+
+        let level = UIDevice.current.batteryLevel
+        let pctInt = level >= 0 ? Int(round(level * 100.0)) : 85
+        batteryPercentLabel.text = "\(pctInt)%"
     }
 
     override func layoutSubviews() {
@@ -666,14 +692,16 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             refreshButton.tintColor = .white
             batteryView.layer.borderColor = UIColor(white: 0.90, alpha: 1.0).cgColor
             batteryCapView.backgroundColor = UIColor(white: 0.90, alpha: 1.0)
-            batteryFill.backgroundColor = .white
+            batteryFill.backgroundColor = UIColor(white: 0.42, alpha: 1.0)
+            batteryPercentLabel.textColor = .white
         } else {
             headerSubtleTint.colors = [UIColor(white: 0.0, alpha: 0.05).cgColor, UIColor.clear.cgColor]
             playStateIcon.textColor = theme.primaryText
             refreshButton.tintColor = theme.primaryText
             batteryView.layer.borderColor = theme.primaryText.withAlphaComponent(0.75).cgColor
             batteryCapView.backgroundColor = theme.primaryText.withAlphaComponent(0.75)
-            batteryFill.backgroundColor = theme.primaryText
+            batteryFill.backgroundColor = theme.highlightTop.withAlphaComponent(0.45)
+            batteryPercentLabel.textColor = theme.primaryText
         }
 
         coverTitleLabel.textColor = theme.primaryText
@@ -742,9 +770,15 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         return CGRect(x: targetCenterX - 50.0, y: targetTopY, width: 100.0, height: 100.0)
     }
 
-    func showSongsCoverFlow(title: String, tracks: [IPodTrack], selectedIndex: Int = 0, animateFromNowPlaying: Bool = false) {
+    func showSongsCoverFlow(
+        title: String,
+        tracks: [IPodTrack],
+        selectedIndex: Int = 0,
+        animateFromNowPlaying: Bool = false,
+        showStreamingRefresh: Bool = false
+    ) {
         stopSmoothScrollDisplayLink()
-        refreshButton.isHidden = true
+        refreshButton.isHidden = !showStreamingRefresh
         let wasNowPlaying = !nowPlayingContainer.isHidden
         let sourceArtworkFrame = artworkView.convert(artworkView.bounds, to: self)
         let sourceArtworkImage = artworkView.image
@@ -1043,12 +1077,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     }
 
     private func makeDefaultNoteArtwork() -> UIImage? {
-        let size = CGSize(width: 140, height: 140)
-        UIGraphicsBeginImageContextWithOptions(size, true, 0)
+        let size = CGSize(width: 96, height: 96)
+        UIGraphicsBeginImageContextWithOptions(size, true, 1.0)
         theme.highlightTop.setFill()
         UIRectFill(CGRect(origin: .zero, size: size))
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: 52, weight: .bold),
+            .font: UIFont.systemFont(ofSize: 34, weight: .bold),
             .foregroundColor: UIColor.white
         ]
         let str = "♫"

@@ -8,7 +8,6 @@ enum IPodMenuNode {
     case playlists
     case playlistTracks(IPodPlaylistGroup)
     case allSongs
-    case streaming
     case streamingSongs(pageIndex: Int)
     case settings
 }
@@ -49,9 +48,24 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         clickWheel.delegate = self
 
         screenView.onCoverFlowTrackSelected = { [weak self] index in
+            guard let self = self else { return }
+            if let top = self.menuStack.last, case .streamingSongs(let pageIndex) = top.node {
+                let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
+                if pageData.tracks.indices.contains(index) {
+                    let chosen = pageData.tracks[index]
+                    self.startQueue(
+                        tracks: IPodStreamingLibrary.shared.allStreamingTracks,
+                        at: 0,
+                        selectedTrack: chosen,
+                        useRelatedOrder: true
+                    )
+                }
+                return
+            }
+
             let songs = IPodMusicLibrary.shared.allTracks
             if songs.indices.contains(index) {
-                self?.startQueue(tracks: songs, at: index, useRelatedOrder: false)
+                self.startQueue(tracks: songs, at: index, useRelatedOrder: false)
             }
         }
 
@@ -333,33 +347,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 IPodMenuRow(title: "Songs", hasSubmenu: true)
             ])
 
-        case .streaming:
-            return ("Streaming", [
-                IPodMenuRow(title: "Songs", hasSubmenu: true, valueBadge: "\(IPodStreamingLibrary.shared.allStreamingTracks.count)")
-            ])
-
         case .streamingSongs(let pageIndex):
             let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
-            if pageData.tracks.isEmpty {
-                return ("Songs", [IPodMenuRow(title: "Tidak ada lagu streaming", hasSubmenu: false)])
-            }
-            var menuItems = pageData.tracks.map {
-                IPodMenuRow(title: $0.title, hasSubmenu: false, valueBadge: $0.artist)
-            }
-            if pageData.totalPages > 1 {
-                let nextPage = (pageData.currentPage + 1) % pageData.totalPages
-                menuItems.append(
-                    IPodMenuRow(
-                        title: "Next 50 Songs",
-                        hasSubmenu: false,
-                        valueBadge: "\(pageData.currentPage + 1)/\(pageData.totalPages) → \(nextPage + 1)"
-                    )
-                )
-            }
             let header = pageData.totalPages > 1
-                ? "Songs (\(pageData.currentPage + 1)/\(pageData.totalPages))"
-                : "Songs"
-            return (header, menuItems)
+                ? "Streaming (\(pageData.currentPage + 1)/\(pageData.totalPages))"
+                : "Streaming"
+            return (header, pageData.tracks.map { IPodMenuRow(title: $0.title, hasSubmenu: false) })
 
         case .playlists:
             var items = [IPodMenuRow(title: "+ New Playlist...", hasSubmenu: false)]
@@ -417,7 +410,23 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 title: "Songs",
                 tracks: songs,
                 selectedIndex: restoreIndex,
-                animateFromNowPlaying: animateFromNowPlaying
+                animateFromNowPlaying: animateFromNowPlaying,
+                showStreamingRefresh: false
+            )
+            return
+        }
+
+        if case .streamingSongs(let pageIndex) = top.node {
+            let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
+            let header = pageData.totalPages > 1
+                ? "Streaming (\(pageData.currentPage + 1)/\(pageData.totalPages))"
+                : "Streaming"
+            screenView.showSongsCoverFlow(
+                title: header,
+                tracks: pageData.tracks,
+                selectedIndex: restoreIndex,
+                animateFromNowPlaying: animateFromNowPlaying,
+                showStreamingRefresh: true
             )
             return
         }
@@ -429,18 +438,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             return false
         }()
 
-        let isStreamingSongs = {
-            if case .streamingSongs = top.node { return true }
-            return false
-        }()
-
         let content = rows(for: top.node)
         screenView.showMenu(
             title: content.title,
             items: content.items,
             selectedIndex: restoreIndex,
             isModernSettings: isSettings,
-            showStreamingRefresh: isStreamingSongs
+            showStreamingRefresh: false
         )
     }
 
@@ -517,6 +521,26 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             }
             return
         }
+
+        if let top = menuStack.last, case .streamingSongs(let pageIndex) = top.node {
+            let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
+            let proposed = screenView.selectedIndex + steps
+            if pageData.totalPages > 1 {
+                if proposed >= pageData.tracks.count {
+                    let nextPage = (pageData.currentPage + 1) % pageData.totalPages
+                    menuStack[menuStack.count - 1] = (.streamingSongs(pageIndex: nextPage), 0)
+                    renderTopMenu(restoreIndex: 0)
+                    return
+                } else if proposed < 0 && pageData.currentPage > 0 {
+                    let prevPage = pageData.currentPage - 1
+                    let prevCount = IPodStreamingLibrary.shared.tracksPage(pageIndex: prevPage).tracks.count
+                    menuStack[menuStack.count - 1] = (.streamingSongs(pageIndex: prevPage), max(0, prevCount - 1))
+                    renderTopMenu(restoreIndex: max(0, prevCount - 1))
+                    return
+                }
+            }
+        }
+
         screenView.moveSelection(by: steps)
     }
 
@@ -558,7 +582,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                     pushMenu(.allSongs)
                 }
             } else if idx == 1 {
-                pushMenu(.streaming)
+                pushMenu(.streamingSongs(pageIndex: 0))
             } else if idx == 2 {
                 pushMenu(.settings)
             }
@@ -570,20 +594,16 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             default: break
             }
 
-        case .streaming:
-            if idx == 0 {
-                pushMenu(.streamingSongs(pageIndex: 0))
-            }
-
         case .streamingSongs(let pageIndex):
             let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
             if pageData.tracks.indices.contains(idx) {
                 let chosen = pageData.tracks[idx]
-                startQueue(tracks: IPodStreamingLibrary.shared.allStreamingTracks, at: 0, selectedTrack: chosen, useRelatedOrder: true)
-            } else if pageData.totalPages > 1 && idx == pageData.tracks.count {
-                let nextPage = (pageData.currentPage + 1) % pageData.totalPages
-                menuStack[menuStack.count - 1] = (.streamingSongs(pageIndex: nextPage), 0)
-                renderTopMenu(restoreIndex: 0)
+                startQueue(
+                    tracks: IPodStreamingLibrary.shared.allStreamingTracks,
+                    at: 0,
+                    selectedTrack: chosen,
+                    useRelatedOrder: true
+                )
             }
 
         case .playlists:
