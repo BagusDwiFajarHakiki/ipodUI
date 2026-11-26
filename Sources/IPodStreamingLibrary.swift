@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import MediaPlayer
 
 struct IPodStreamingCatalogItem: Codable {
     let id: String
@@ -25,6 +26,7 @@ final class IPodStreamingLibrary {
     }
 
     private func makeTrack(
+        id: String,
         title: String,
         artist: String,
         album: String,
@@ -33,11 +35,13 @@ final class IPodStreamingLibrary {
         artworkImage: UIImage?
     ) -> IPodTrack {
         return IPodTrack(
+            id: id,
             title: title,
             artist: artist,
             album: album,
             duration: duration,
             assetURL: assetURL,
+            mediaItem: nil,
             artworkImage: artworkImage
         )
     }
@@ -53,6 +57,7 @@ final class IPodStreamingLibrary {
                         guard let audioURL = URL(string: item.streamURL) else { return nil }
                         let art = self.makeArtwork(title: item.title, artist: item.artist, genre: item.genre)
                         return self.makeTrack(
+                            id: item.id,
                             title: item.title,
                             artist: item.artist,
                             album: item.album,
@@ -156,6 +161,7 @@ final class IPodStreamingLibrary {
             let title = cycle == 0 ? base.title : "\(base.title) \(cycle + 1)"
             let art = makeArtwork(title: title, artist: base.artist, genre: base.genre)
             let track = makeTrack(
+                id: "stream_\(idx)_\(base.title.lowercased().replacingOccurrences(of: " ", with: "_"))",
                 title: title,
                 artist: base.artist,
                 album: base.album,
