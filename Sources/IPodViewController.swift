@@ -775,7 +775,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             )
         }
 
-        if track.id.hasPrefix("stream_") {
+        if track.id.hasPrefix("innertube_") {
             IPodStreamingLibrary.shared.resolvePlayableAudio(for: track, forceRefresh: isWatchdogRetry) { [weak self] result in
                 guard let self = self else { return }
                 guard self.currentQueue.indices.contains(self.currentTrackIndex),
@@ -785,20 +785,14 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 case .playable(let url):
                     self.startAVPlayer(with: url, track: track, resumeFromSeconds: resumeFromSeconds)
                 case .failed(let reason):
-                    if let fallback = track.assetURL ?? IPodStreamingLibrary.shared.defaultFallbackURL(for: track.id) {
-                        self.startAVPlayer(with: fallback, track: track, resumeFromSeconds: resumeFromSeconds)
-                    } else {
-                        self.isPlaying = false
-                        self.screenView.updatePlayState(isPlaying: false)
-                        self.screenView.showStatusBanner("Gagal Putar: \(reason)")
-                    }
+                    self.screenView.showStatusBanner("Gagal Putar: \(reason)")
+                    self.playNextTrack()
                 }
             }
             return
         }
 
-        let resolvedAssetURL = track.assetURL ?? IPodStreamingLibrary.shared.defaultFallbackURL(for: track.id)
-        if let url = resolvedAssetURL {
+        if let url = track.assetURL {
             startAVPlayer(with: url, track: track, resumeFromSeconds: resumeFromSeconds)
         } else {
             isPlaying = false
@@ -809,7 +803,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private func startAVPlayer(with url: URL, track: IPodTrack, resumeFromSeconds: Double = 0) {
         let headers: [String: String] = [
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1.2 Mobile/15E148 Safari/604.1"
+            "User-Agent": "com.google.ios.youtubemusic/7.29.3 (iPhone; U; CPU iPhone OS 12_5_8 like Mac OS X; en_US)"
         ]
         let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
         let item = AVPlayerItem(asset: asset)
