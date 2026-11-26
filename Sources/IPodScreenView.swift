@@ -15,9 +15,9 @@ enum IPodColorTheme: CaseIterable {
 
     var screenBackground: UIColor {
         switch self {
-        case .darkPod:     return UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 0.92)
-        case .sepiaPod:    return UIColor(red: 0.96, green: 0.92, blue: 0.83, alpha: 0.96)
-        case .classicBlue: return UIColor(red: 0.96, green: 0.97, blue: 0.99, alpha: 0.96)
+        case .darkPod:     return UIColor(red: 0.06, green: 0.06, blue: 0.08, alpha: 1.0)
+        case .sepiaPod:    return UIColor(red: 0.96, green: 0.92, blue: 0.83, alpha: 1.0)
+        case .classicBlue: return UIColor(red: 0.96, green: 0.97, blue: 0.99, alpha: 1.0)
         }
     }
 
@@ -361,9 +361,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        layer.cornerRadius = 6
-        layer.borderWidth = 0
-        layer.borderColor = nil
+        layer.cornerRadius = 8
+        layer.borderWidth = 1.0
+        layer.borderColor = UIColor(white: 1.0, alpha: 0.14).cgColor
         clipsToBounds = true
         setupUI()
         applyTheme()
@@ -779,6 +779,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         clockLabel.textColor = theme.primaryText
 
         if theme == .darkPod {
+            layer.borderColor = UIColor(white: 1.0, alpha: 0.14).cgColor
             headerSubtleTint.colors = [UIColor(white: 1.0, alpha: 0.06).cgColor, UIColor.clear.cgColor]
             playStateIcon.textColor = .white
             coverLoadingSpinner.color = .white
@@ -787,6 +788,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             batteryFill.backgroundColor = UIColor(white: 0.42, alpha: 1.0)
             batteryPercentLabel.textColor = .white
         } else {
+            layer.borderColor = UIColor(white: 0.0, alpha: 0.14).cgColor
             headerSubtleTint.colors = [UIColor(white: 0.0, alpha: 0.05).cgColor, UIColor.clear.cgColor]
             playStateIcon.textColor = theme.primaryText
             coverLoadingSpinner.color = theme.primaryText

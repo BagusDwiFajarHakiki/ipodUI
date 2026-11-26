@@ -15,6 +15,7 @@ enum IPodMenuNode {
 class IPodViewController: UIViewController, ClickWheelDelegate {
     private let bodyGradient = CAGradientLayer()
     private let ambientGlowImageView = UIImageView()
+    private let screenShadowView = UIView()
     private let screenView = IPodScreenView()
     private let clickWheel = ClickWheelView()
 
@@ -165,6 +166,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 wheelRect: wheelFrameInGlow
             )
         }
+        if screenShadowView.bounds.width > 0 {
+            screenShadowView.layer.shadowPath = UIBezierPath(
+                roundedRect: screenShadowView.bounds,
+                cornerRadius: 8
+            ).cgPath
+        }
     }
 
     private func setupBodyAndLayout() {
@@ -173,6 +180,15 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         ambientGlowImageView.contentMode = .scaleToFill
         ambientGlowImageView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(ambientGlowImageView)
+
+        screenShadowView.backgroundColor = UIColor(red: 0.04, green: 0.04, blue: 0.05, alpha: 1.0)
+        screenShadowView.layer.cornerRadius = 8
+        screenShadowView.layer.shadowColor = UIColor.black.cgColor
+        screenShadowView.layer.shadowOpacity = 0.72
+        screenShadowView.layer.shadowOffset = CGSize(width: 0, height: 2)
+        screenShadowView.layer.shadowRadius = 7
+        screenShadowView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(screenShadowView)
 
         screenView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(screenView)
@@ -189,6 +205,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             screenView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
+
+            screenShadowView.topAnchor.constraint(equalTo: screenView.topAnchor),
+            screenShadowView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor),
+            screenShadowView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor),
+            screenShadowView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor),
 
             ambientGlowImageView.topAnchor.constraint(equalTo: view.topAnchor),
             ambientGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -289,16 +310,19 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         switch theme {
         case .darkPod:
+            screenShadowView.layer.shadowOpacity = 0.72
             bodyGradient.colors = [
                 UIColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0).cgColor,
                 UIColor(red: 0.04, green: 0.04, blue: 0.05, alpha: 1.0).cgColor
             ]
         case .sepiaPod:
+            screenShadowView.layer.shadowOpacity = 0.28
             bodyGradient.colors = [
                 UIColor(red: 0.90, green: 0.85, blue: 0.76, alpha: 1.0).cgColor,
                 UIColor(red: 0.80, green: 0.74, blue: 0.63, alpha: 1.0).cgColor
             ]
         case .classicBlue:
+            screenShadowView.layer.shadowOpacity = 0.25
             bodyGradient.colors = [
                 UIColor(white: 0.88, alpha: 1.0).cgColor,
                 UIColor(white: 0.76, alpha: 1.0).cgColor
