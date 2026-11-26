@@ -46,24 +46,13 @@ final class IPodStreamingLibrary {
     private var artworkCache: [String: UIImage] = [:]
 
     private let songQueries = [
-        "official audio single song",
-        "acoustic guitar song audio",
-        "piano instrumental song audio",
-        "synthwave track official audio",
-        "indie pop song audio"
+        "official audio song",
+        "indie music song",
+        "pop song official audio",
+        "acoustic song official audio",
+        "electronic music song"
     ]
     private var queryIndex: Int = 0
-
-    private let directAudioFallbackURLs: [String] = [
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3"
-    ]
 
     private init() {
         fetchSongsFromInnerTube(reshuffle: false) { _ in }
@@ -88,11 +77,6 @@ final class IPodStreamingLibrary {
             mediaItem: nil,
             artworkImage: artworkImage
         )
-    }
-
-    func fallbackAudioURL(for track: IPodTrack) -> URL? {
-        let idx = abs(track.id.hashValue) % directAudioFallbackURLs.count
-        return URL(string: directAudioFallbackURLs[idx])
     }
 
     func refreshTracks(completion: @escaping (Bool) -> Void) {
@@ -157,10 +141,8 @@ final class IPodStreamingLibrary {
             return
         }
 
-        let backupURL = fallbackAudioURL(for: track)
-
         guard let videoId = videoIdByTrackId[track.id], !videoId.isEmpty else {
-            completion(backupURL)
+            completion(nil)
             return
         }
 
@@ -173,12 +155,11 @@ final class IPodStreamingLibrary {
             }
 
             self?.resolveFromMobileWatchPage(videoId: videoId) { watchStreamURL in
-                let finalURL = watchStreamURL ?? backupURL
-                if let fURL = finalURL {
-                    self?.resolvedStreamURLCache[track.id] = fURL
+                if let wURL = watchStreamURL {
+                    self?.resolvedStreamURLCache[track.id] = wURL
                 }
                 DispatchQueue.main.async {
-                    completion(finalURL)
+                    completion(watchStreamURL)
                 }
             }
         }
@@ -208,16 +189,15 @@ final class IPodStreamingLibrary {
             var thumbMap: [String: String] = [:]
 
             for (idx, entry) in entries.enumerated() {
-                let trackId = "song_\(entry.videoId)_\(idx)"
+                let trackId = "innertube_\(entry.videoId)_\(idx)"
                 let placeholderArt = self.placeholderArtwork(seed: entry.videoId)
-                let backupURL = URL(string: self.directAudioFallbackURLs[idx % self.directAudioFallbackURLs.count])
                 let track = self.makeTrack(
                     id: trackId,
                     title: entry.title,
                     artist: entry.artist,
                     album: entry.album,
                     duration: 195,
-                    assetURL: backupURL,
+                    assetURL: nil,
                     artworkImage: placeholderArt
                 )
                 tracks.append(track)
