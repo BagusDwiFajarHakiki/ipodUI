@@ -7,54 +7,38 @@ enum IPodStreamResolutionResult {
     case failed(reason: String)
 }
 
-private enum MetroLite12Client {
-    case androidVr
+private enum MetroLiteClient {
     case iosMusic
     case webRemix
+    case tvEmbedded
     case mweb
 
     var clientName: String {
         switch self {
-        case .androidVr: return "ANDROID_VR"
-        case .iosMusic:  return "IOS_MUSIC"
-        case .webRemix:  return "WEB_REMIX"
-        case .mweb:      return "MWEB"
+        case .iosMusic:   return "IOS_MUSIC"
+        case .webRemix:   return "WEB_REMIX"
+        case .tvEmbedded: return "TVHTML5_SIMPLY_EMBEDDED_PLAYER"
+        case .mweb:       return "MWEB"
         }
     }
 
     var clientVersion: String {
         switch self {
-        case .androidVr: return "1.65.10"
-        case .iosMusic:  return "7.29.3"
-        case .webRemix:  return "1.20260707.12.00"
-        case .mweb:      return "2.20260501.01.00"
-        }
-    }
-
-    var deviceModel: String? {
-        switch self {
-        case .androidVr: return "Quest 3"
-        case .iosMusic:  return "iPhone14,2"
-        case .webRemix, .mweb: return nil
-        }
-    }
-
-    var osVersion: String? {
-        switch self {
-        case .androidVr: return "12"
-        case .iosMusic:  return "16.6.1.20G81"
-        case .webRemix, .mweb: return nil
+        case .iosMusic:   return "6.42.1"
+        case .webRemix:   return "1.20250101.01.00"
+        case .tvEmbedded: return "2.0"
+        case .mweb:       return "2.20250101.01.00"
         }
     }
 
     var userAgent: String {
         switch self {
-        case .androidVr:
-            return "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12; Quest 3 Build/SQ3A.220605.009.A1) gzip"
         case .iosMusic:
-            return "com.google.ios.youtubemusic/7.29.3 (iPhone14,2; U; CPU iPhone OS 16_6_1 like Mac OS X; en_US)"
+            return "com.google.ios.youtubemusic/6.42.1 (iPhone; U; CPU iPhone OS 12_5_8 like Mac OS X; en_US)"
         case .webRemix:
-            return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        case .tvEmbedded:
+            return "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/537.36 (KHTML, like Gecko) TV Safari/537.36"
         case .mweb:
             return "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1.2 Mobile/15E148 Safari/604.1"
         }
@@ -176,7 +160,7 @@ final class IPodStreamingLibrary {
             return
         }
 
-        let clients: [MetroLite12Client] = [.androidVr, .iosMusic, .webRemix, .mweb]
+        let clients: [MetroLiteClient] = [.iosMusic, .webRemix, .tvEmbedded, .mweb]
         resolvePlayerStream(videoId: videoId, clients: clients, index: 0, lastErrorReason: "No Direct Audio URL") { [weak self] result in
             switch result {
             case .playable(let url):
@@ -211,7 +195,7 @@ final class IPodStreamingLibrary {
         let q = songQueries[queryIndex % songQueries.count]
         queryIndex += 1
 
-        let clients: [MetroLite12Client] = [.webRemix, .mweb, .iosMusic, .androidVr]
+        let clients: [MetroLiteClient] = [.webRemix, .iosMusic, .mweb]
         searchInnerTube(query: q, clients: clients, index: 0) { [weak self] entries in
             guard let self = self else {
                 DispatchQueue.main.async { completion(false) }
@@ -251,25 +235,9 @@ final class IPodStreamingLibrary {
         }
     }
 
-    private func buildClientContext(for client: MetroLite12Client) -> [String: Any] {
-        var clientDict: [String: Any] = [
-            "clientName": client.clientName,
-            "clientVersion": client.clientVersion,
-            "hl": "en",
-            "gl": "US"
-        ]
-        if let model = client.deviceModel {
-            clientDict["deviceModel"] = model
-        }
-        if let osVer = client.osVersion {
-            clientDict["osVersion"] = osVer
-        }
-        return ["client": clientDict]
-    }
-
     private func searchInnerTube(
         query: String,
-        clients: [MetroLite12Client],
+        clients: [MetroLiteClient],
         index: Int,
         completion: @escaping ([InnerTubeSongEntry]) -> Void
     ) {
@@ -284,7 +252,14 @@ final class IPodStreamingLibrary {
         }
 
         let body: [String: Any] = [
-            "context": buildClientContext(for: client),
+            "context": [
+                "client": [
+                    "clientName": client.clientName,
+                    "clientVersion": client.clientVersion,
+                    "hl": "en",
+                    "gl": "US"
+                ]
+            ],
             "query": query
         ]
 
@@ -447,7 +422,7 @@ final class IPodStreamingLibrary {
 
     private func resolvePlayerStream(
         videoId: String,
-        clients: [MetroLite12Client],
+        clients: [MetroLiteClient],
         index: Int,
         lastErrorReason: String,
         completion: @escaping (IPodStreamResolutionResult) -> Void
@@ -463,7 +438,14 @@ final class IPodStreamingLibrary {
         }
 
         let payload: [String: Any] = [
-            "context": buildClientContext(for: client),
+            "context": [
+                "client": [
+                    "clientName": client.clientName,
+                    "clientVersion": client.clientVersion,
+                    "hl": "en",
+                    "gl": "US"
+                ]
+            ],
             "videoId": videoId,
             "contentCheckOk": true,
             "racyCheckOk": true
@@ -512,36 +494,51 @@ final class IPodStreamingLibrary {
                 return
             }
 
-            if let statusObj = json["playabilityStatus"] as? [String: Any] {
-                let reasonDetail = statusObj["reason"] as? String ?? ""
-                let status = (statusObj["status"] as? String ?? "").uppercased()
-                if status.contains("LOGIN_REQUIRED") || status.contains("ERROR") || status.contains("UNPLAYABLE") {
-                    let msg = reasonDetail.isEmpty ? status : reasonDetail
-                    self.resolvePlayerStream(
-                        videoId: videoId,
-                        clients: clients,
-                        index: index + 1,
-                        lastErrorReason: "\(client.clientName): \(msg)",
-                        completion: completion
-                    )
-                    return
-                }
-            }
-
             let extraction = self.extractAudioStreamURL(from: json)
             switch extraction {
             case .playable(let url):
                 completion(.playable(url))
             case .failed(let reason):
+                let statusObj = json["playabilityStatus"] as? [String: Any]
+                let detail = statusObj?["reason"] as? String
+                let msg = (detail?.isEmpty == false) ? detail! : reason
                 self.resolvePlayerStream(
                     videoId: videoId,
                     clients: clients,
                     index: index + 1,
-                    lastErrorReason: "\(client.clientName): \(reason)",
+                    lastErrorReason: "\(client.clientName): \(msg)",
                     completion: completion
                 )
             }
         }.resume()
+    }
+
+    private func extractURLFromCipher(_ cipherString: String) -> URL? {
+        var extractedURL: String?
+        var signatureParam: String?
+        var spParam: String = "sig"
+
+        for part in cipherString.components(separatedBy: "&") {
+            let kv = part.components(separatedBy: "=")
+            guard kv.count == 2 else { continue }
+            let key = kv[0]
+            let val = kv[1].removingPercentEncoding ?? kv[1]
+            if key == "url" {
+                extractedURL = val
+            } else if key == "s" {
+                signatureParam = val
+            } else if key == "sp" && !val.isEmpty {
+                spParam = val
+            }
+        }
+
+        guard let baseStr = extractedURL, var comps = URLComponents(string: baseStr) else { return nil }
+        if let sig = signatureParam, !sig.isEmpty {
+            var items = comps.queryItems ?? []
+            items.append(URLQueryItem(name: spParam, value: sig))
+            comps.queryItems = items
+        }
+        return comps.url
     }
 
     private func extractAudioStreamURL(from playerJSON: [String: Any]) -> IPodStreamResolutionResult {
@@ -562,13 +559,13 @@ final class IPodStreamingLibrary {
             return b1 > b2
         }
 
-        var sawCipheredAudio = false
         for fmt in sortedAudio {
             if let urlStr = fmt["url"] as? String, let url = URL(string: urlStr) {
                 return .playable(url)
             }
-            if fmt["signatureCipher"] != nil || fmt["cipher"] != nil {
-                sawCipheredAudio = true
+            if let cipher = (fmt["signatureCipher"] as? String) ?? (fmt["cipher"] as? String),
+               let cipherURL = extractURLFromCipher(cipher) {
+                return .playable(cipherURL)
             }
         }
 
@@ -576,12 +573,13 @@ final class IPodStreamingLibrary {
             if let urlStr = fmt["url"] as? String, let url = URL(string: urlStr) {
                 return .playable(url)
             }
+            if let cipher = (fmt["signatureCipher"] as? String) ?? (fmt["cipher"] as? String),
+               let cipherURL = extractURLFromCipher(cipher) {
+                return .playable(cipherURL)
+            }
         }
 
-        if sawCipheredAudio {
-            return .failed(reason: "Ciphered Stream (No Direct URL)")
-        }
-        return .failed(reason: "No Direct Audio URL")
+        return .failed(reason: "No Playable Audio URL")
     }
 
     private func resolveFromMobileWatchPage(videoId: String, completion: @escaping (IPodStreamResolutionResult) -> Void) {
@@ -623,7 +621,7 @@ final class IPodStreamingLibrary {
                     }
                 }
             }
-            completion(.failed(reason: "Stream Unavailable on iOS 12"))
+            completion(.failed(reason: "Watch Audio Not Found"))
         }.resume()
     }
 

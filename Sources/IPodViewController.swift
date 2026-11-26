@@ -770,9 +770,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 case .playable(let url):
                     self.startAVPlayer(with: url, track: track)
                 case .failed(let reason):
-                    self.isPlaying = false
-                    self.screenView.updatePlayState(isPlaying: false)
                     self.screenView.showStatusBanner("Gagal Putar: \(reason)")
+                    self.playNextTrack()
                 }
             }
             return
