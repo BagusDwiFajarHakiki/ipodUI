@@ -13,8 +13,7 @@ enum IPodMenuNode {
 
 class IPodViewController: UIViewController, ClickWheelDelegate {
     private let bodyGradient = CAGradientLayer()
-    private let surroundGlowImageView = UIImageView()
-    private let bottomGlowImageView = UIImageView()
+    private let lcdEdgeGlowImageView = UIImageView()
     private let screenView = IPodScreenView()
     private let clickWheel = ClickWheelView()
 
@@ -23,6 +22,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var isPlaylistsMenuEnabled: Bool = true
     private var currentGlowColor = UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
     private var playingTrackArtwork: UIImage?
+    private var lastGlowBoundsSize: CGSize = .zero
 
     private var player: AVPlayer?
     private var playbackTimer: Timer?
@@ -70,22 +70,28 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         bodyGradient.frame = view.bounds
+
+        // Render ulang tekstur cahaya pinggiran LCD sesuai ukuran layar aktual
+        let glowSize = lcdEdgeGlowImageView.bounds.size
+        if glowSize.width > 0, glowSize.height > 0, glowSize != lastGlowBoundsSize {
+            lastGlowBoundsSize = glowSize
+            lcdEdgeGlowImageView.image = makeRectangularEdgeGlowImage(
+                canvasSize: glowSize,
+                insetX: 24,
+                insetY: 24,
+                feather: 28,
+                cornerRadius: 8
+            )
+        }
     }
 
     private func setupBodyAndLayout() {
         view.layer.insertSublayer(bodyGradient, at: 0)
 
-        // Cahaya penuh di sekeliling LCD (atas, kiri, kanan, bawah)
-        surroundGlowImageView.image = makeSoftRadialGlowImage(size: CGSize(width: 240, height: 220))
-        surroundGlowImageView.contentMode = .scaleToFill
-        surroundGlowImageView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(surroundGlowImageView)
-
-        // Cahaya tambahan memanjang sampai batas bawah Click Wheel
-        bottomGlowImageView.image = makeSoftRadialGlowImage(size: CGSize(width: 260, height: 320))
-        bottomGlowImageView.contentMode = .scaleToFill
-        bottomGlowImageView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(bottomGlowImageView)
+        // Pendaran cahaya persegi panjang di sekeliling pinggiran luar LCD yang memudar keluar
+        lcdEdgeGlowImageView.contentMode = .scaleToFill
+        lcdEdgeGlowImageView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(lcdEdgeGlowImageView)
 
         screenView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(screenView)
@@ -99,52 +105,47 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
-            // Pendaran di sekeliling LCD (atas, kiri, kanan, bawah)
-            surroundGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -26),
-            surroundGlowImageView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor, constant: 30),
-            surroundGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -18),
-            surroundGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 18),
+            lcdEdgeGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -24),
+            lcdEdgeGlowImageView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor, constant: 24),
+            lcdEdgeGlowImageView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor, constant: -24),
+            lcdEdgeGlowImageView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor, constant: 24),
 
             clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -42),
             clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.70),
-            clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor),
-
-            // Cahaya bawah memanjang tepat sampai batas bawah Click Wheel
-            bottomGlowImageView.topAnchor.constraint(equalTo: screenView.bottomAnchor, constant: -24),
-            bottomGlowImageView.bottomAnchor.constraint(equalTo: clickWheel.bottomAnchor, constant: 10),
-            bottomGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -22),
-            bottomGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 22)
+            clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor)
         ])
     }
 
-    private func makeSoftRadialGlowImage(size: CGSize) -> UIImage? {
-        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+    private func makeRectangularEdgeGlowImage(
+        canvasSize: CGSize,
+        insetX: CGFloat,
+        insetY: CGFloat,
+        feather: CGFloat,
+        cornerRadius: CGFloat
+    ) -> UIImage? {
+        UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        let center = CGPoint(x: size.width / 2.0, y: size.height / 2.0)
-        let maxRadius = max(size.width, size.height) / 2.0
-        let colors = [
-            UIColor.white.withAlphaComponent(1.0).cgColor,
-            UIColor.white.withAlphaComponent(0.58).cgColor,
-            UIColor.white.withAlphaComponent(0.20).cgColor,
-            UIColor.white.withAlphaComponent(0.0).cgColor
-        ] as CFArray
-        let locations: [CGFloat] = [0.0, 0.40, 0.74, 1.0]
+        let innerRect = CGRect(
+            x: insetX,
+            y: insetY,
+            width: max(10, canvasSize.width - insetX * 2),
+            height: max(10, canvasSize.height - insetY * 2)
+        )
 
-        if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: locations) {
-            ctx.saveGState()
-            ctx.translateBy(x: center.x, y: center.y)
-            ctx.scaleBy(x: size.width / (maxRadius * 2.0), y: size.height / (maxRadius * 2.0))
-            ctx.drawRadialGradient(
-                gradient,
-                startCenter: .zero,
-                startRadius: 0,
-                endCenter: .zero,
-                endRadius: maxRadius,
-                options: [.drawsAfterEndLocation]
-            )
-            ctx.restoreGState()
+        let steps = 30
+        for i in 0..<steps {
+            let progress = CGFloat(i) / CGFloat(steps - 1)
+            let expand = progress * feather
+            let rect = innerRect.insetBy(dx: -expand, dy: -expand)
+            let radius = cornerRadius + expand
+
+            let alpha = pow(1.0 - progress, 2.2) * 0.14
+            ctx.setFillColor(UIColor.white.withAlphaComponent(alpha).cgColor)
+            let path = UIBezierPath(roundedRect: rect, cornerRadius: radius)
+            ctx.addPath(path.cgPath)
+            ctx.fillPath()
         }
 
         let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
@@ -179,10 +180,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private func applyGlowColors(_ color: UIColor) {
         let isDark = (screenView.theme == .darkPod)
-        surroundGlowImageView.tintColor = color
-        bottomGlowImageView.tintColor = color
-        surroundGlowImageView.alpha = isDark ? 0.56 : 0.30
-        bottomGlowImageView.alpha = isDark ? 0.46 : 0.24
+        lcdEdgeGlowImageView.tintColor = color
+        lcdEdgeGlowImageView.alpha = isDark ? 0.95 : 0.65
     }
 
     private func updateAmbientGlow(from image: UIImage?) {
@@ -244,7 +243,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
-    // MARK: - Pengaturan Ikon Aplikasi (Dark / Light) di Home Screen iPhone
     private var isLightAppIconActive: Bool {
         return UIApplication.shared.alternateIconName == "AppIconLight"
     }
@@ -336,7 +334,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             return
         }
 
-        // Saat berada di menu utama (bukan Cover Flow Songs), gunakan warna dari lagu yang sedang diputar
         updateAmbientGlow(from: playingTrackArtwork)
 
         let isSettings = {
