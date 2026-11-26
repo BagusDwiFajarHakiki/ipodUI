@@ -8,39 +8,34 @@ enum IPodStreamResolutionResult {
 }
 
 private enum MetroLite12Client {
+    case iosMusic
     case webRemix
-    case mweb
-    case ios
-    case android
+    case tvEmbedded
 
     var clientName: String {
         switch self {
-        case .webRemix: return "WEB_REMIX"
-        case .mweb:     return "MWEB"
-        case .ios:      return "IOS"
-        case .android:  return "ANDROID"
+        case .iosMusic:   return "IOS_MUSIC"
+        case .webRemix:   return "WEB_REMIX"
+        case .tvEmbedded: return "TVHTML5_SIMPLY_EMBEDDED_PLAYER"
         }
     }
 
     var clientVersion: String {
         switch self {
-        case .webRemix: return "1.20260707.12.00"
-        case .mweb:     return "2.20260501.01.00"
-        case .ios:      return "20.10.4"
-        case .android:  return "19.29.37"
+        case .iosMusic:   return "6.42.1"
+        case .webRemix:   return "1.20250101.01.00"
+        case .tvEmbedded: return "2.0"
         }
     }
 
     var userAgent: String {
         switch self {
+        case .iosMusic:
+            return "com.google.ios.youtubemusic/6.42.1 (iPhone; U; CPU iPhone OS 12_5_8 like Mac OS X; en_US)"
         case .webRemix:
-            return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-        case .mweb:
-            return "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1.2 Mobile/15E148 Safari/604.1"
-        case .ios:
-            return "com.google.ios.youtube/20.10.4 (iPhone; U; CPU iPhone OS 12_5_8 like Mac OS X; en_US)"
-        case .android:
-            return "com.google.android.youtube/19.29.37 (Linux; U; Android 11) gzip"
+            return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        case .tvEmbedded:
+            return "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/537.36 (KHTML, like Gecko) TV Safari/537.36"
         }
     }
 }
@@ -160,7 +155,7 @@ final class IPodStreamingLibrary {
             return
         }
 
-        let clients: [MetroLite12Client] = [.webRemix, .mweb, .ios, .android]
+        let clients: [MetroLite12Client] = [.iosMusic, .webRemix, .tvEmbedded]
         resolvePlayerStream(videoId: videoId, clients: clients, index: 0, lastErrorReason: "No Direct Audio URL") { [weak self] result in
             switch result {
             case .playable(let url):
@@ -194,7 +189,7 @@ final class IPodStreamingLibrary {
         let q = songQueries[queryIndex % songQueries.count]
         queryIndex += 1
 
-        let clients: [MetroLite12Client] = [.webRemix, .mweb, .ios, .android]
+        let clients: [MetroLite12Client] = [.iosMusic, .webRemix, .tvEmbedded]
         searchInnerTube(query: q, clients: clients, index: 0) { [weak self] entries in
             guard let self = self else {
                 DispatchQueue.main.async { completion(false) }
@@ -496,10 +491,7 @@ final class IPodStreamingLibrary {
             if let statusObj = json["playabilityStatus"] as? [String: Any] {
                 let reasonDetail = statusObj["reason"] as? String ?? ""
                 let status = (statusObj["status"] as? String ?? "").uppercased()
-                if reasonDetail.lowercased().contains("no longer supported")
-                    || status.contains("LOGIN_REQUIRED")
-                    || status.contains("ERROR")
-                    || status.contains("UNPLAYABLE") {
+                if status.contains("LOGIN_REQUIRED") || status.contains("ERROR") || status.contains("UNPLAYABLE") {
                     let msg = reasonDetail.isEmpty ? status : reasonDetail
                     self.resolvePlayerStream(
                         videoId: videoId,

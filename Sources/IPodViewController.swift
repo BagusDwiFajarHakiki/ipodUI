@@ -30,7 +30,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var endObserver: Any?
     private var stallObserver: Any?
     private var failedEndObserver: Any?
-    private var reconnectAttempts: Int = 0
     private var currentQueue: [IPodTrack] = []
     private var currentTrackIndex: Int = 0
     private var isPlaying = false
@@ -708,7 +707,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             currentTrackIndex = tracks.firstIndex(where: { $0.id == targetTrack.id }) ?? max(0, min(index, tracks.count - 1))
         }
 
-        reconnectAttempts = 0
         playTrack(at: currentTrackIndex, transitionDirection: 0)
         openNowPlayingScreen(animateFromCoverFlow: wasCoverFlow)
     }
@@ -741,7 +739,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
-    private func playTrack(at index: Int, transitionDirection: Int = 0, resumeFromSeconds: Double = 0, forceRefreshURL: Bool = false) {
+    private func playTrack(at index: Int, transitionDirection: Int = 0) {
         guard currentQueue.indices.contains(index) else { return }
         let track = currentQueue[index]
 
@@ -763,14 +761,14 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         if track.id.hasPrefix("innertube_") {
-            IPodStreamingLibrary.shared.resolvePlayableAudio(for: track, forceRefresh: forceRefreshURL) { [weak self] result in
+            IPodStreamingLibrary.shared.resolvePlayableAudio(for: track) { [weak self] result in
                 guard let self = self else { return }
                 guard self.currentQueue.indices.contains(self.currentTrackIndex),
                       self.currentQueue[self.currentTrackIndex].id == track.id else { return }
 
                 switch result {
                 case .playable(let url):
-                    self.startAVPlayer(with: url, track: track, resumeFromSeconds: resumeFromSeconds)
+                    self.startAVPlayer(with: url, track: track)
                 case .failed(let reason):
                     self.isPlaying = false
                     self.screenView.updatePlayState(isPlaying: false)
@@ -781,7 +779,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         if let url = track.assetURL {
-            startAVPlayer(with: url, track: track, resumeFromSeconds: resumeFromSeconds)
+            startAVPlayer(with: url, track: track)
         } else {
             isPlaying = false
             screenView.updatePlayState(isPlaying: false)
@@ -789,30 +787,21 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
-    private func startAVPlayer(with url: URL, track: IPodTrack, resumeFromSeconds: Double = 0) {
+    private func startAVPlayer(with url: URL, track: IPodTrack) {
         let headers: [String: String] = [
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1.2 Mobile/15E148 Safari/604.1"
+            "User-Agent": "com.google.ios.youtubemusic/6.42.1 (iPhone; U; CPU iPhone OS 12_5_8 like Mac OS X; en_US)"
         ]
         let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
         let item = AVPlayerItem(asset: asset)
-        item.preferredForwardBufferDuration = 15.0
 
         player = AVPlayer(playerItem: item)
-        if resumeFromSeconds > 1.0 {
-            let seekTarget = CMTime(seconds: resumeFromSeconds, preferredTimescale: 600)
-            player?.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                self?.player?.play()
-            }
-        } else {
-            player?.play()
-        }
+        player?.play()
 
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
             queue: .main
         ) { [weak self] _ in
-            self?.reconnectAttempts = 0
             self?.playNextTrack()
         }
 
@@ -821,7 +810,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             object: item,
             queue: .main
         ) { [weak self] _ in
-            self?.handleStreamInterruption(for: track, item: item)
+            IPodStreamingLibrary.shared.invalidateCachedURL(for: track)
+            self?.playNextTrack()
         }
 
         failedEndObserver = NotificationCenter.default.addObserver(
@@ -829,38 +819,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             object: item,
             queue: .main
         ) { [weak self] _ in
-            self?.handleStreamInterruption(for: track, item: item)
+            IPodStreamingLibrary.shared.invalidateCachedURL(for: track)
+            self?.playNextTrack()
         }
 
         startProgressTimer()
-        updateNowPlayingInfo(track: track, elapsed: resumeFromSeconds)
-    }
-
-    private func handleStreamInterruption(for track: IPodTrack, item: AVPlayerItem) {
-        guard isPlaying, currentQueue.indices.contains(currentTrackIndex),
-              currentQueue[currentTrackIndex].id == track.id else { return }
-
-        let currentSec = CMTimeGetSeconds(item.currentTime())
-        let safeSec = currentSec.isFinite && currentSec > 0 ? currentSec : 0
-        let totalDur = CMTimeGetSeconds(item.duration)
-
-        // Jika sudah sangat dekat dengan akhir durasi, lanjut ke lagu berikutnya
-        if totalDur.isFinite && totalDur > 5.0 && safeSec >= totalDur - 3.0 {
-            reconnectAttempts = 0
-            playNextTrack()
-            return
-        }
-
-        // Coba pulihkan / refresh URL stream jika terputus di tengah (seperti detik ke-59)
-        if track.id.hasPrefix("innertube_") && reconnectAttempts < 2 {
-            reconnectAttempts += 1
-            IPodStreamingLibrary.shared.invalidateCachedURL(for: track)
-            playTrack(at: currentTrackIndex, transitionDirection: 0, resumeFromSeconds: safeSec, forceRefreshURL: true)
-            return
-        }
-
-        reconnectAttempts = 0
-        playNextTrack()
+        updateNowPlayingInfo(track: track, elapsed: 0)
     }
 
     private func seekToRatio(_ ratio: Double, isFinished: Bool) {
@@ -904,7 +868,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private func playNextTrack() {
         guard !currentQueue.isEmpty else { return }
-        reconnectAttempts = 0
         currentTrackIndex = (currentTrackIndex + 1) % currentQueue.count
         playTrack(at: currentTrackIndex, transitionDirection: 1)
     }
@@ -915,7 +878,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             player.seek(to: .zero)
             return
         }
-        reconnectAttempts = 0
         currentTrackIndex = (currentTrackIndex - 1 + currentQueue.count) % currentQueue.count
         playTrack(at: currentTrackIndex, transitionDirection: -1)
     }
