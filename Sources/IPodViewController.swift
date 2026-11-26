@@ -13,14 +13,14 @@ enum IPodMenuNode {
 
 class IPodViewController: UIViewController, ClickWheelDelegate {
     private let bodyGradient = CAGradientLayer()
-    private let ambientGlowView = UIView()
-    private let glassFrameView = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
+    private let bottomGlowLayer = CAGradientLayer()
     private let screenView = IPodScreenView()
     private let clickWheel = ClickWheelView()
 
     private var menuStack: [(node: IPodMenuNode, selectedIndex: Int)] = [(.root, 0)]
     private var isNowPlayingActive = false
     private var isPlaylistsMenuEnabled: Bool = true
+    private var currentGlowColor = UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
 
     private var player: AVPlayer?
     private var playbackTimer: Timer?
@@ -68,25 +68,21 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         bodyGradient.frame = view.bounds
+
+        // Pendaran cahaya seamless dari pojok kiri bawah hingga kanan bawah LCD dan menyebar lebar ke bawah di belakang Click Wheel
+        let glowTopY = screenView.frame.maxY - 12
+        let glowHeight = max(140, view.bounds.height - glowTopY)
+        bottomGlowLayer.frame = CGRect(x: 0, y: glowTopY, width: view.bounds.width, height: glowHeight)
     }
 
     private func setupBodyAndLayout() {
         view.layer.insertSublayer(bodyGradient, at: 0)
 
-        // Cahaya ambient hanya muncul melebar di bagian bawah LCD
-        ambientGlowView.backgroundColor = UIColor(red: 0.25, green: 0.50, blue: 0.90, alpha: 0.45)
-        ambientGlowView.layer.cornerRadius = 18
-        ambientGlowView.layer.shadowColor = UIColor(red: 0.25, green: 0.50, blue: 0.90, alpha: 1.0).cgColor
-        ambientGlowView.layer.shadowOpacity = 0.85
-        ambientGlowView.layer.shadowOffset = CGSize(width: 0, height: 8)
-        ambientGlowView.layer.shadowRadius = 22
-        ambientGlowView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(ambientGlowView)
-
-        glassFrameView.layer.cornerRadius = 8
-        glassFrameView.clipsToBounds = true
-        glassFrameView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(glassFrameView)
+        // Gradasi cahaya halus tanpa batas garis/kotak (seamless dari kiri ke kanan bawah LCD)
+        bottomGlowLayer.locations = [0.0, 0.22, 0.65, 1.0]
+        bottomGlowLayer.startPoint = CGPoint(x: 0.5, y: 0.0)
+        bottomGlowLayer.endPoint = CGPoint(x: 0.5, y: 1.0)
+        view.layer.insertSublayer(bottomGlowLayer, at: 1)
 
         screenView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(screenView)
@@ -95,27 +91,15 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         view.addSubview(clickWheel)
 
         NSLayoutConstraint.activate([
-            // LCD digeser sedikit ke atas tanpa menggeser posisi Click Wheel
             screenView.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
             screenView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
-            glassFrameView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -3),
-            glassFrameView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor, constant: 3),
-            glassFrameView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor, constant: -3),
-            glassFrameView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor, constant: 3),
-
-            // Pendaran cahaya hanya berada melebar di bawah tepi bawah LCD
-            ambientGlowView.topAnchor.constraint(equalTo: screenView.bottomAnchor, constant: -16),
-            ambientGlowView.heightAnchor.constraint(equalToConstant: 24),
-            ambientGlowView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor, constant: 8),
-            ambientGlowView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor, constant: -8),
-
-            // Posisi Click Wheel tetap dikunci terhadap tepi bawah agar tidak ikut naik
-            clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -34),
+            // Posisi Click Wheel dikembalikan dan berada di atas lapisan cahaya ambient
+            clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -42),
             clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.71),
+            clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.70),
             clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor)
         ])
     }
@@ -130,25 +114,30 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 UIColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0).cgColor,
                 UIColor(red: 0.04, green: 0.04, blue: 0.05, alpha: 1.0).cgColor
             ]
-            glassFrameView.effect = UIBlurEffect(style: .dark)
-            ambientGlowView.alpha = 1.0
-
         case .sepiaPod:
             bodyGradient.colors = [
                 UIColor(red: 0.90, green: 0.85, blue: 0.76, alpha: 1.0).cgColor,
                 UIColor(red: 0.80, green: 0.74, blue: 0.63, alpha: 1.0).cgColor
             ]
-            glassFrameView.effect = UIBlurEffect(style: .light)
-            ambientGlowView.alpha = 0.55
-
         case .classicBlue:
             bodyGradient.colors = [
                 UIColor(white: 0.88, alpha: 1.0).cgColor,
                 UIColor(white: 0.76, alpha: 1.0).cgColor
             ]
-            glassFrameView.effect = UIBlurEffect(style: .light)
-            ambientGlowView.alpha = 0.55
         }
+
+        applyGlowColors(currentGlowColor)
+    }
+
+    private func applyGlowColors(_ color: UIColor) {
+        let peakAlpha: CGFloat = (screenView.theme == .darkPod) ? 0.34 : 0.22
+        let midAlpha: CGFloat = (screenView.theme == .darkPod) ? 0.14 : 0.08
+        bottomGlowLayer.colors = [
+            UIColor.clear.cgColor,
+            color.withAlphaComponent(peakAlpha).cgColor,
+            color.withAlphaComponent(midAlpha).cgColor,
+            UIColor.clear.cgColor
+        ]
     }
 
     private func updateAmbientGlow(from image: UIImage?) {
@@ -156,10 +145,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             ? UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
             : UIColor(red: 0.62, green: 0.42, blue: 0.22, alpha: 1.0))
 
-        UIView.animate(withDuration: 0.45) {
-            self.ambientGlowView.backgroundColor = glowColor.withAlphaComponent(0.45)
-            self.ambientGlowView.layer.shadowColor = glowColor.cgColor
-        }
+        currentGlowColor = glowColor
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.45)
+        applyGlowColors(glowColor)
+        CATransaction.commit()
     }
 
     private func extractDominantColor(from image: UIImage?) -> UIColor? {
@@ -191,7 +181,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             bTotal += CGFloat(rawData[i + 2]) / 255.0
         }
 
-        // Tingkatkan saturasi sedikit agar cahaya di belakang LCD tampak hidup
         let avgColor = UIColor(red: rTotal / count, green: gTotal / count, blue: bTotal / count, alpha: 1.0)
         var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         if avgColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
