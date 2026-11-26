@@ -102,10 +102,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
-            lcdEdgeGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -36),
-            lcdEdgeGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: 24),
-            lcdEdgeGlowImageView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor, constant: -36),
-            lcdEdgeGlowImageView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor, constant: 36),
+            lcdEdgeGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -40),
+            lcdEdgeGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: 28),
+            lcdEdgeGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -40),
+            lcdEdgeGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 40),
 
             clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -42),
             clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -122,49 +122,74 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        // 1. Pendaran merata di sekeliling tepi LCD (atas, kiri, kanan, bawah)
-        let surroundFeather: CGFloat = 34.0
-        let surroundSteps = 28
+        // 1. Pendaran lebih cerah di sekeliling tepi LCD (atas, kiri, kanan, bawah)
+        let surroundFeather: CGFloat = 38.0
+        let surroundSteps = 32
         for i in 0..<surroundSteps {
             let t = CGFloat(i) / CGFloat(surroundSteps - 1)
             let expand = t * surroundFeather
             let rect = lcdRect.insetBy(dx: -expand, dy: -expand)
-            let alpha = pow(1.0 - t, 2.8) * 0.055
+            let alpha = pow(1.0 - t, 2.3) * 0.095
             ctx.setFillColor(UIColor.white.withAlphaComponent(alpha).cgColor)
             let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius + expand)
             ctx.addPath(path.cgPath)
             ctx.fillPath()
         }
 
-        // 2. Perpanjangan cahaya ke bawah dengan lebar sama persis dengan bingkai LCD
+        // 2. Perpanjangan cahaya ke bawah dengan kecerahan lebih jelas dan tepi kiri-kanan memudar ke dalam
         let downExtensionHeight = max(0, canvasSize.height - lcdRect.maxY)
         if downExtensionHeight > 0 {
-            let downSteps = 32
+            let downSteps = 36
             for i in 0..<downSteps {
                 let t = CGFloat(i) / CGFloat(downSteps - 1)
                 let currentHeight = t * downExtensionHeight
+                // Semakin ke bawah, sisi kiri & kanan ditarik masuk agar tepi luar selalu memudar halus
+                let sidePullIn = pow(t, 1.35) * (lcdRect.width * 0.24)
                 let downRect = CGRect(
-                    x: lcdRect.minX,
+                    x: lcdRect.minX + sidePullIn,
                     y: lcdRect.maxY - 2,
-                    width: lcdRect.width,
+                    width: max(12, lcdRect.width - sidePullIn * 2),
                     height: max(2, currentHeight)
                 )
-                let alpha = (1.0 - t * 0.72) * pow(1.0 - t, 1.2) * 0.052
+                let alpha = (1.0 - t * 0.65) * pow(1.0 - t, 1.15) * 0.085
                 ctx.setFillColor(UIColor.white.withAlphaComponent(alpha).cgColor)
-                let path = UIBezierPath(roundedRect: downRect, cornerRadius: cornerRadius)
+                let path = UIBezierPath(roundedRect: downRect, cornerRadius: cornerRadius + t * 18.0)
                 ctx.addPath(path.cgPath)
                 ctx.fillPath()
             }
         }
 
-        // 3. Mask vertikal & horizontal agar sisi kiri, kanan, dan bawah memudar lembut menyatu ke bodi
+        // 3. Mask tunggal di akhir agar sisi kiri, kanan, dan bawah memudar mulus tanpa garis tepi
         ctx.setBlendMode(.destinationIn)
         let maskWidth = canvasSize.width
         let maskHeight = canvasSize.height
-        let fadeStartRatio = min(0.88, max(0.35, (lcdRect.maxY + downExtensionHeight * 0.45) / max(1, maskHeight)))
+
+        if let maskCanvas = UIGraphicsGetCurrentContext() {
+            // Gradien horizontal: pudar sejak 18% dari kiri/kanan sehingga sisi kiri & kanan benar-benar memudar
+            let hColors = [
+                UIColor.white.withAlphaComponent(0.0).cgColor,
+                UIColor.white.withAlphaComponent(0.32).cgColor,
+                UIColor.white.withAlphaComponent(0.85).cgColor,
+                UIColor.white.withAlphaComponent(1.0).cgColor,
+                UIColor.white.withAlphaComponent(0.85).cgColor,
+                UIColor.white.withAlphaComponent(0.32).cgColor,
+                UIColor.white.withAlphaComponent(0.0).cgColor
+            ] as CFArray
+            let hLocations: [CGFloat] = [0.04, 0.18, 0.32, 0.50, 0.68, 0.82, 0.96]
+            if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
+                maskCanvas.drawLinearGradient(
+                    hGrad,
+                    start: CGPoint(x: 0, y: maskHeight * 0.5),
+                    end: CGPoint(x: maskWidth, y: maskHeight * 0.5),
+                    options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+                )
+            }
+        }
+
+        let fadeStartRatio = min(0.90, max(0.38, (lcdRect.maxY + downExtensionHeight * 0.45) / max(1, maskHeight)))
         let vColors = [
             UIColor.white.withAlphaComponent(1.0).cgColor,
-            UIColor.white.withAlphaComponent(0.82).cgColor,
+            UIColor.white.withAlphaComponent(0.85).cgColor,
             UIColor.white.withAlphaComponent(0.0).cgColor
         ] as CFArray
         let vLocations: [CGFloat] = [0.0, fadeStartRatio, 1.0]
@@ -173,24 +198,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 vGrad,
                 start: CGPoint(x: maskWidth * 0.5, y: 0),
                 end: CGPoint(x: maskWidth * 0.5, y: maskHeight),
-                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
-            )
-        }
-
-        let hColors = [
-            UIColor.white.withAlphaComponent(0.0).cgColor,
-            UIColor.white.withAlphaComponent(0.55).cgColor,
-            UIColor.white.withAlphaComponent(1.0).cgColor,
-            UIColor.white.withAlphaComponent(1.0).cgColor,
-            UIColor.white.withAlphaComponent(0.55).cgColor,
-            UIColor.white.withAlphaComponent(0.0).cgColor
-        ] as CFArray
-        let hLocations: [CGFloat] = [0.0, 0.14, 0.28, 0.72, 0.86, 1.0]
-        if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
-            ctx.drawLinearGradient(
-                hGrad,
-                start: CGPoint(x: 0, y: maskHeight * 0.5),
-                end: CGPoint(x: maskWidth, y: maskHeight * 0.5),
                 options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
             )
         }
@@ -228,7 +235,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func applyGlowColors(_ color: UIColor) {
         let isDark = (screenView.theme == .darkPod)
         lcdEdgeGlowImageView.tintColor = color
-        lcdEdgeGlowImageView.alpha = isDark ? 0.72 : 0.44
+        lcdEdgeGlowImageView.alpha = isDark ? 0.92 : 0.58
     }
 
     private func updateAmbientGlow(from image: UIImage?) {
@@ -274,7 +281,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         let avgColor = UIColor(red: rTotal / count, green: gTotal / count, blue: bTotal / count, alpha: 1.0)
         var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         if avgColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
-            return UIColor(hue: h, saturation: min(1.0, max(s * 1.35, 0.35)), brightness: min(1.0, max(b * 1.1, 0.50)), alpha: 1.0)
+            return UIColor(hue: h, saturation: min(1.0, max(s * 1.4, 0.40)), brightness: min(1.0, max(b * 1.18, 0.58)), alpha: 1.0)
         }
         return avgColor
     }
