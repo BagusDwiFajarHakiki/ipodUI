@@ -35,7 +35,6 @@ final class IPodStreamingLibrary {
                         guard let audioURL = URL(string: item.streamURL) else { return nil }
                         let art = self.makeArtwork(title: item.title, artist: item.artist, genre: item.genre)
                         return IPodTrack(
-                            id: item.id,
                             title: item.title,
                             artist: item.artist,
                             album: item.album,
@@ -61,7 +60,6 @@ final class IPodStreamingLibrary {
             return
         }
 
-        // Refresh lokal: acak ulang / perbarui urutan katalog streaming
         loadSeedTracks(reshuffle: true)
         completion(true)
     }
@@ -79,7 +77,6 @@ final class IPodStreamingLibrary {
         return (slice, safePage, totalPages, safePage + 1 < totalPages)
     }
 
-    // Menyusun antrean berikutnya agar sesuai dengan lagu yang sedang dipilih/diputar saat ini
     func buildRelatedQueue(startingWith selectedTrack: IPodTrack, in pool: [IPodTrack]) -> [IPodTrack] {
         let source = pool.isEmpty ? allStreamingTracks : pool
         guard !source.isEmpty else { return [selectedTrack] }
@@ -141,7 +138,6 @@ final class IPodStreamingLibrary {
             let title = cycle == 0 ? base.title : "\(base.title) \(cycle + 1)"
             let art = makeArtwork(title: title, artist: base.artist, genre: base.genre)
             let track = IPodTrack(
-                id: "stream_\(idx)_\(base.title.lowercased().replacingOccurrences(of: " ", with: "_"))",
                 title: title,
                 artist: base.artist,
                 album: base.album,
