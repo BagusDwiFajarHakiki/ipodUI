@@ -35,7 +35,9 @@ class ClickWheelView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func setupWheel() {
-        wheelLayer.lineWidth = 1.5
+        // Tanpa garis pinggir pada roda sentuh maupun tombol tengah
+        wheelLayer.lineWidth = 0
+        wheelLayer.strokeColor = nil
         wheelLayer.shadowColor = UIColor.black.cgColor
         wheelLayer.shadowOpacity = 0.32
         wheelLayer.shadowOffset = CGSize(width: 0, height: 4)
@@ -59,7 +61,8 @@ class ClickWheelView: UIView {
         playPauseIconView.contentMode = .scaleAspectFit
         addSubview(playPauseIconView)
 
-        centerButton.layer.borderWidth = 1.0
+        centerButton.layer.borderWidth = 0
+        centerButton.layer.borderColor = nil
         centerButton.addTarget(self, action: #selector(didTapCenter), for: .touchUpInside)
         addSubview(centerButton)
     }
@@ -69,23 +72,17 @@ class ClickWheelView: UIView {
         switch theme {
         case .darkPod:
             wheelLayer.fillColor = UIColor(red: 0.14, green: 0.14, blue: 0.16, alpha: 1.0).cgColor
-            wheelLayer.strokeColor = UIColor(white: 0.24, alpha: 1.0).cgColor
             centerButton.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0)
-            centerButton.layer.borderColor = UIColor(white: 0.22, alpha: 1.0).cgColor
             iconTint = UIColor(white: 0.90, alpha: 1.0)
 
         case .sepiaPod:
             wheelLayer.fillColor = UIColor(red: 0.96, green: 0.93, blue: 0.87, alpha: 1.0).cgColor
-            wheelLayer.strokeColor = UIColor(red: 0.80, green: 0.74, blue: 0.64, alpha: 1.0).cgColor
             centerButton.backgroundColor = UIColor(red: 0.86, green: 0.80, blue: 0.70, alpha: 1.0)
-            centerButton.layer.borderColor = UIColor(red: 0.75, green: 0.68, blue: 0.58, alpha: 1.0).cgColor
             iconTint = UIColor(red: 0.34, green: 0.25, blue: 0.16, alpha: 1.0)
 
         case .classicBlue:
             wheelLayer.fillColor = UIColor(white: 0.96, alpha: 1.0).cgColor
-            wheelLayer.strokeColor = UIColor(white: 0.78, alpha: 1.0).cgColor
             centerButton.backgroundColor = UIColor(white: 0.84, alpha: 1.0)
-            centerButton.layer.borderColor = UIColor(white: 0.74, alpha: 1.0).cgColor
             iconTint = UIColor(white: 0.32, alpha: 1.0)
         }
 
@@ -100,19 +97,16 @@ class ClickWheelView: UIView {
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
         ctx.setFillColor(UIColor.white.cgColor)
         let h = size.height
-        // Segitiga 1
         ctx.move(to: CGPoint(x: 2, y: 1))
         ctx.addLine(to: CGPoint(x: 11, y: h / 2))
         ctx.addLine(to: CGPoint(x: 2, y: h - 1))
         ctx.closePath()
         ctx.fillPath()
-        // Segitiga 2
         ctx.move(to: CGPoint(x: 11, y: 1))
         ctx.addLine(to: CGPoint(x: 20, y: h / 2))
         ctx.addLine(to: CGPoint(x: 11, y: h - 1))
         ctx.closePath()
         ctx.fillPath()
-        // Batang tegak tebal di kanan
         ctx.fill(CGRect(x: 20.5, y: 1, width: 2.8, height: h - 2))
         let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
         UIGraphicsEndImageContext()
@@ -124,15 +118,12 @@ class ClickWheelView: UIView {
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
         ctx.setFillColor(UIColor.white.cgColor)
         let h = size.height
-        // Batang tegak tebal di kiri
         ctx.fill(CGRect(x: 0.7, y: 1, width: 2.8, height: h - 2))
-        // Segitiga 1
         ctx.move(to: CGPoint(x: 13, y: 1))
         ctx.addLine(to: CGPoint(x: 4, y: h / 2))
         ctx.addLine(to: CGPoint(x: 13, y: h - 1))
         ctx.closePath()
         ctx.fillPath()
-        // Segitiga 2
         ctx.move(to: CGPoint(x: 22, y: 1))
         ctx.addLine(to: CGPoint(x: 13, y: h / 2))
         ctx.addLine(to: CGPoint(x: 22, y: h - 1))
@@ -148,13 +139,11 @@ class ClickWheelView: UIView {
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
         ctx.setFillColor(UIColor.white.cgColor)
         let h = size.height
-        // Segitiga Play tebal
         ctx.move(to: CGPoint(x: 2, y: 1))
         ctx.addLine(to: CGPoint(x: 12.5, y: h / 2))
         ctx.addLine(to: CGPoint(x: 2, y: h - 1))
         ctx.closePath()
         ctx.fillPath()
-        // Dua batang Pause tebal
         ctx.fill(CGRect(x: 15.5, y: 1, width: 3.2, height: h - 2))
         ctx.fill(CGRect(x: 20.8, y: 1, width: 3.2, height: h - 2))
         let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)

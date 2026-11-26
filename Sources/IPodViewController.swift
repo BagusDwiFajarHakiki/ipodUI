@@ -74,13 +74,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func setupBodyAndLayout() {
         view.layer.insertSublayer(bodyGradient, at: 0)
 
-        // Tekstur cahaya radial lembut di sekeliling LCD (atas, kiri, kanan, bawah)
         surroundGlowImageView.image = makeSoftRadialGlowImage(size: CGSize(width: 240, height: 220))
         surroundGlowImageView.contentMode = .scaleToFill
         surroundGlowImageView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(surroundGlowImageView)
 
-        // Tekstur cahaya radial lebar memanjang dari bawah LCD hingga ke bawah Click Wheel
         bottomGlowImageView.image = makeSoftRadialGlowImage(size: CGSize(width: 260, height: 320))
         bottomGlowImageView.contentMode = .scaleToFill
         bottomGlowImageView.translatesAutoresizingMaskIntoConstraints = false
@@ -241,6 +239,21 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
+    // MARK: - Pengaturan Ikon Aplikasi (Dark / Light) di Home Screen iPhone
+    private var isLightAppIconActive: Bool {
+        return UIApplication.shared.alternateIconName == "AppIconLight"
+    }
+
+    private func toggleHomeScreenAppIcon() {
+        guard UIApplication.shared.supportsAlternateIcons else { return }
+        let nextIconName: String? = isLightAppIconActive ? nil : "AppIconLight"
+        UIApplication.shared.setAlternateIconName(nextIconName) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.renderTopMenu(restoreIndex: 2)
+            }
+        }
+    }
+
     // MARK: - Menu Navigation Engine
     private func rows(for node: IPodMenuNode) -> (title: String, items: [IPodMenuRow]) {
         switch node {
@@ -279,9 +292,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         case .settings:
             let themeLabel = "Theme: \(screenView.theme.displayName)"
             let playlistToggleLabel = "Playlists Menu: \(isPlaylistsMenuEnabled ? "ON" : "OFF")"
+            let appIconLabel = "App Icon: \(isLightAppIconActive ? "Light" : "Dark")"
             return ("Settings", [
                 IPodMenuRow(title: themeLabel, hasSubmenu: false),
                 IPodMenuRow(title: playlistToggleLabel, hasSubmenu: false),
+                IPodMenuRow(title: appIconLabel, hasSubmenu: false),
                 IPodMenuRow(title: "Reload Music Library", hasSubmenu: false)
             ])
         }
@@ -467,8 +482,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 UserDefaults.standard.set(isPlaylistsMenuEnabled, forKey: "ipod_playlists_enabled")
                 renderTopMenu(restoreIndex: 1)
             } else if idx == 2 {
+                toggleHomeScreenAppIcon()
+            } else if idx == 3 {
                 IPodMusicLibrary.shared.reloadAllSources()
-                renderTopMenu(restoreIndex: 2)
+                renderTopMenu(restoreIndex: 3)
             }
         }
     }

@@ -118,7 +118,7 @@ class IPodMenuCell: UITableViewCell {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-// MARK: - Cover Flow Cell
+// MARK: - Cover Flow Cell (Tanpa Garis Pinggir pada Sampul)
 class IPodCoverFlowCell: UICollectionViewCell {
     let coverImageView = UIImageView()
     let reflectionImageView = UIImageView()
@@ -131,8 +131,8 @@ class IPodCoverFlowCell: UICollectionViewCell {
 
         coverImageView.contentMode = .scaleAspectFill
         coverImageView.clipsToBounds = true
-        coverImageView.layer.borderWidth = 1.0
-        coverImageView.layer.borderColor = UIColor(white: 0.45, alpha: 0.6).cgColor
+        coverImageView.layer.borderWidth = 0
+        coverImageView.layer.borderColor = nil
         coverImageView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(coverImageView)
 
@@ -342,10 +342,11 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         nowPlayingContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(nowPlayingContainer)
 
+        // Sampul di Now Playing tanpa garis pinggir
         artworkView.contentMode = .scaleAspectFill
         artworkView.clipsToBounds = true
-        artworkView.layer.borderWidth = 1.0
-        artworkView.layer.borderColor = UIColor(white: 0.45, alpha: 0.6).cgColor
+        artworkView.layer.borderWidth = 0
+        artworkView.layer.borderColor = nil
         artworkView.backgroundColor = UIColor(white: 0.25, alpha: 1.0)
         artworkView.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(artworkView)
@@ -394,7 +395,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         remainingLabel.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(remainingLabel)
 
-        // Hanya izinkan geser (UIPanGestureRecognizer), tap saja tidak mengubah posisi durasi
         progressTouchArea.backgroundColor = .clear
         progressTouchArea.isUserInteractionEnabled = true
         progressTouchArea.translatesAutoresizingMaskIntoConstraints = false
@@ -594,7 +594,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverCollectionView.reloadData()
     }
 
-    // MARK: - Touchscreen Scrubbing (Hanya Geser, Tanpa Tap)
+    // MARK: - Touchscreen Scrubbing
     @objc private func handleProgressScrub(_ gesture: UIPanGestureRecognizer) {
         let pt = gesture.location(in: progressTrack)
         let width = max(progressTrack.bounds.width, 1.0)
@@ -685,8 +685,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             flyingCover.image = sourceArtworkImage ?? makeDefaultNoteArtwork()
             flyingCover.contentMode = .scaleAspectFill
             flyingCover.clipsToBounds = true
-            flyingCover.layer.borderWidth = 1.0
-            flyingCover.layer.borderColor = UIColor(white: 0.45, alpha: 0.6).cgColor
+            flyingCover.layer.borderWidth = 0
             addSubview(flyingCover)
 
             let centerIndexPath = IndexPath(item: self.selectedIndex, section: 0)
@@ -865,8 +864,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             flyingCover.image = nextImage
             flyingCover.contentMode = .scaleAspectFill
             flyingCover.clipsToBounds = true
-            flyingCover.layer.borderWidth = 1.0
-            flyingCover.layer.borderColor = UIColor(white: 0.45, alpha: 0.6).cgColor
+            flyingCover.layer.borderWidth = 0
             addSubview(flyingCover)
 
             artworkView.alpha = 0.0

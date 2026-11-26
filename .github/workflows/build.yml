@@ -12,6 +12,128 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Generate Click Wheel App Icons (Dark & Light)
+        run: |
+          cat << 'EOF' > generate_icons.swift
+          import AppKit
+          import CoreGraphics
+
+          func renderIcon(size: Int, isDark: Bool, outputPath: String) {
+              let s = CGFloat(size)
+              let rep = NSBitmapImageRep(
+                  bitmapDataPlanes: nil,
+                  pixelsWide: size,
+                  pixelsHigh: size,
+                  bitsPerSample: 8,
+                  samplesPerPixel: 4,
+                  hasAlpha: true,
+                  isPlanar: false,
+                  colorSpaceName: .deviceRGB,
+                  bytesPerRow: 0,
+                  bitsPerPixel: 0
+              )!
+              rep.size = NSSize(width: s, height: s)
+
+              NSGraphicsContext.saveGraphicsState()
+              let nsCtx = NSGraphicsContext(bitmapImageRep: rep)!
+              NSGraphicsContext.current = nsCtx
+              let ctx = nsCtx.cgContext
+
+              // Background
+              let bgColor = isDark
+                  ? CGColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 1.0)
+                  : CGColor(red: 0.96, green: 0.96, blue: 0.97, alpha: 1.0)
+              ctx.setFillColor(bgColor)
+              ctx.fill(CGRect(x: 0, y: 0, width: s, height: s))
+
+              let center = CGPoint(x: s / 2.0, y: s / 2.0)
+              let outerRadius = s * 0.38
+              let innerRadius = s * 0.145
+
+              // Click Wheel Ring
+              let wheelColor = isDark
+                  ? CGColor(red: 0.95, green: 0.95, blue: 0.96, alpha: 1.0)
+                  : CGColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1.0)
+              ctx.setFillColor(wheelColor)
+              ctx.addArc(center: center, radius: outerRadius, startAngle: 0, endAngle: .pi * 2, clockwise: false)
+              ctx.fillPath()
+
+              // Center Button
+              let centerColor = isDark
+                  ? CGColor(red: 0.11, green: 0.11, blue: 0.13, alpha: 1.0)
+                  : CGColor(red: 0.90, green: 0.90, blue: 0.92, alpha: 1.0)
+              ctx.setFillColor(centerColor)
+              ctx.addArc(center: center, radius: innerRadius, startAngle: 0, endAngle: .pi * 2, clockwise: false)
+              ctx.fillPath()
+
+              // 4 Directional Dots/Indicators on the Wheel
+              let glyphColor = isDark
+                  ? CGColor(red: 0.22, green: 0.22, blue: 0.25, alpha: 1.0)
+                  : CGColor(red: 0.88, green: 0.88, blue: 0.90, alpha: 1.0)
+              ctx.setFillColor(glyphColor)
+
+              let midR = (outerRadius + innerRadius) / 2.0
+              let dotR = s * 0.022
+              let offsets: [(CGFloat, CGFloat)] = [
+                  (0, midR),
+                  (0, -midR),
+                  (-midR, 0),
+                  (midR, 0)
+              ]
+              for (dx, dy) in offsets {
+                  ctx.addArc(center: CGPoint(x: center.x + dx, y: center.y + dy), radius: dotR, startAngle: 0, endAngle: .pi * 2, clockwise: false)
+                  ctx.fillPath()
+              }
+
+              NSGraphicsContext.restoreGraphicsState()
+              let pngData = rep.representation(using: .png, properties: [:])!
+              try! pngData.write(to: URL(fileURLWithPath: outputPath))
+          }
+
+          let fm = FileManager.default
+          let darkSet = "Assets.xcassets/AppIcon.appiconset"
+          let lightSet = "Assets.xcassets/AppIconLight.appiconset"
+          try? fm.createDirectory(atPath: darkSet, withIntermediateDirectories: true)
+          try? fm.createDirectory(atPath: lightSet, withIntermediateDirectories: true)
+
+          let specs: [(String, Int, String, String)] = [
+              ("icon_40.png", 40, "20x20", "2x"),
+              ("icon_60.png", 60, "20x20", "3x"),
+              ("icon_58.png", 58, "29x29", "2x"),
+              ("icon_87.png", 87, "29x29", "3x"),
+              ("icon_80.png", 80, "40x40", "2x"),
+              ("icon_120_40.png", 120, "40x40", "3x"),
+              ("icon_120.png", 120, "60x60", "2x"),
+              ("icon_180.png", 180, "60x60", "3x"),
+              ("icon_1024.png", 1024, "1024x1024", "1x")
+          ]
+
+          func writeIconSet(dir: String, isDark: Bool) {
+              var imagesJson: [[String: String]] = []
+              for (filename, px, ptSize, scale) in specs {
+                  renderIcon(size: px, isDark: isDark, outputPath: "\(dir)/\(filename)")
+                  let idiom = ptSize == "1024x1024" ? "ios-marketing" : "iphone"
+                  imagesJson.append([
+                      "size": ptSize,
+                      "idiom": idiom,
+                      "filename": filename,
+                      "scale": scale
+                  ])
+              }
+              let root: [String: Any] = [
+                  "images": imagesJson,
+                  "info": ["version": 1, "author": "xcode"]
+              ]
+              let jsonData = try! JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted])
+              try! jsonData.write(to: URL(fileURLWithPath: "\(dir)/Contents.json"))
+          }
+
+          writeIconSet(dir: darkSet, isDark: true)
+          writeIconSet(dir: lightSet, isDark: false)
+          EOF
+          swift generate_icons.swift
+          rm generate_icons.swift
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
