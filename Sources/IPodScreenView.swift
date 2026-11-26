@@ -183,7 +183,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     }
 
     var onCoverFlowTrackSelected: ((Int) -> Void)?
-    var onSeekRatioChanged: ((Double) -> Void)?
+    // Parameter kedua (isFinished) menandakan apakah jari masih menggeser atau sudah dilepas
+    var onSeekRatioChanged: ((Double, Bool) -> Void)?
     var onActiveCoverImageChanged: ((UIImage?) -> Void)?
 
     // Modern Seamless Status Bar
@@ -215,7 +216,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private var displayLink: CADisplayLink?
     private var targetCoverOffsetX: CGFloat = 0
 
-    // Now Playing View (Sampul Besar 124x124 + Refleksi, Judul & Artis di Tengah Sampul, Jumlah Lagu Sejajar Bawah Sampul)
+    // Now Playing View
     private let nowPlayingContainer = UIView()
     private let artworkView = UIImageView()
     private let artworkReflectionView = UIImageView()
@@ -236,9 +237,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        // Sudut lancip dan tanpa garis pembatas putih di pinggir LCD
         layer.cornerRadius = 6
-        layer.borderWidth = 1.5
-        layer.borderColor = UIColor(white: 0.26, alpha: 0.85).cgColor
+        layer.borderWidth = 0
+        layer.borderColor = nil
         clipsToBounds = true
         setupUI()
         applyTheme()
@@ -365,7 +367,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         artworkReflectionMask.locations = [0.05, 0.55, 1.0]
         artworkReflectionView.layer.mask = artworkReflectionMask
 
-        // Stack Judul & Artis berada tepat di tengah vertikal cover art
         nowPlayingTextStack.axis = .vertical
         nowPlayingTextStack.alignment = .leading
         nowPlayingTextStack.spacing = 4
@@ -380,12 +381,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         trackArtistLabel.numberOfLines = 1
         nowPlayingTextStack.addArrangedSubview(trackArtistLabel)
 
-        // Jumlah lagu (misal "8 / 18") berada di bawah sejajar batas bawah sampul utama
         trackIndexLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         trackIndexLabel.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(trackIndexLabel)
 
-        // Baris durasi dengan batas kiri, kanan, dan bawah yang lebih lega
         elapsedLabel.text = "0:00"
         elapsedLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
         elapsedLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -397,13 +396,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         remainingLabel.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(remainingLabel)
 
+        // Hanya izinkan geser (UIPanGestureRecognizer), tap saja tidak mengubah posisi durasi
         progressTouchArea.backgroundColor = .clear
         progressTouchArea.isUserInteractionEnabled = true
         progressTouchArea.translatesAutoresizingMaskIntoConstraints = false
         let panSeek = UIPanGestureRecognizer(target: self, action: #selector(handleProgressScrub(_:)))
-        let tapSeek = UITapGestureRecognizer(target: self, action: #selector(handleProgressTap(_:)))
         progressTouchArea.addGestureRecognizer(panSeek)
-        progressTouchArea.addGestureRecognizer(tapSeek)
         nowPlayingContainer.addSubview(progressTouchArea)
 
         progressTrack.layer.cornerRadius = 1.5
@@ -493,7 +491,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             nowPlayingContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
             nowPlayingContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            // Sampul lebih besar (124x124) dengan batas kiri lebih lega (18pt)
             artworkView.topAnchor.constraint(equalTo: nowPlayingContainer.topAnchor, constant: 12),
             artworkView.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 18),
             artworkView.widthAnchor.constraint(equalToConstant: 124),
@@ -504,17 +501,14 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             artworkReflectionView.widthAnchor.constraint(equalToConstant: 124),
             artworkReflectionView.heightAnchor.constraint(equalToConstant: 46),
 
-            // Judul lagu & artis tepat di tengah vertikal cover art
             nowPlayingTextStack.leadingAnchor.constraint(equalTo: artworkView.trailingAnchor, constant: 14),
             nowPlayingTextStack.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -18),
             nowPlayingTextStack.centerYAnchor.constraint(equalTo: artworkView.centerYAnchor, constant: -8),
 
-            // Jumlah lagu di bawah sejajar batas bawah sampul utama
             trackIndexLabel.leadingAnchor.constraint(equalTo: nowPlayingTextStack.leadingAnchor),
             trackIndexLabel.trailingAnchor.constraint(equalTo: nowPlayingTextStack.trailingAnchor),
             trackIndexLabel.bottomAnchor.constraint(equalTo: artworkView.bottomAnchor, constant: -2),
 
-            // Baris durasi dengan batas kiri (18pt), kanan (-18pt), dan bawah (-16pt) lebih besar
             elapsedLabel.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 18),
             elapsedLabel.bottomAnchor.constraint(equalTo: nowPlayingContainer.bottomAnchor, constant: -16),
             elapsedLabel.widthAnchor.constraint(equalToConstant: 36),
@@ -576,14 +570,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         if theme == .darkPod {
             headerSubtleTint.colors = [UIColor(white: 1.0, alpha: 0.06).cgColor, UIColor.clear.cgColor]
-            layer.borderColor = UIColor(white: 0.28, alpha: 0.85).cgColor
             playStateIcon.textColor = .white
             batteryView.layer.borderColor = UIColor(white: 0.90, alpha: 1.0).cgColor
             batteryCapView.backgroundColor = UIColor(white: 0.90, alpha: 1.0)
             batteryFill.backgroundColor = .white
         } else {
             headerSubtleTint.colors = [UIColor(white: 0.0, alpha: 0.05).cgColor, UIColor.clear.cgColor]
-            layer.borderColor = UIColor(white: 0.45, alpha: 0.7).cgColor
             playStateIcon.textColor = theme.primaryText
             batteryView.layer.borderColor = theme.primaryText.withAlphaComponent(0.75).cgColor
             batteryCapView.backgroundColor = theme.primaryText.withAlphaComponent(0.75)
@@ -604,15 +596,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverCollectionView.reloadData()
     }
 
-    // MARK: - Touchscreen Scrubbing
-    @objc private func handleProgressTap(_ gesture: UITapGestureRecognizer) {
-        let pt = gesture.location(in: progressTrack)
-        let width = max(progressTrack.bounds.width, 1.0)
-        let ratio = Double(min(max(pt.x / width, 0.0), 1.0))
-        progressWidthConstraint.constant = CGFloat(ratio) * width
-        onSeekRatioChanged?(ratio)
-    }
-
+    // MARK: - Touchscreen Scrubbing (Hanya Geser, Tanpa Tap)
     @objc private func handleProgressScrub(_ gesture: UIPanGestureRecognizer) {
         let pt = gesture.location(in: progressTrack)
         let width = max(progressTrack.bounds.width, 1.0)
@@ -622,10 +606,11 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         case .began, .changed:
             isScrubbing = true
             progressWidthConstraint.constant = CGFloat(ratio) * width
-            onSeekRatioChanged?(ratio)
+            onSeekRatioChanged?(ratio, false)
         case .ended, .cancelled:
             isScrubbing = false
-            onSeekRatioChanged?(ratio)
+            progressWidthConstraint.constant = CGFloat(ratio) * width
+            onSeekRatioChanged?(ratio, true)
         default:
             break
         }

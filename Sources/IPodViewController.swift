@@ -13,6 +13,7 @@ enum IPodMenuNode {
 
 class IPodViewController: UIViewController, ClickWheelDelegate {
     private let bodyGradient = CAGradientLayer()
+    private let surroundGlowView = UIView()
     private let bottomGlowLayer = CAGradientLayer()
     private let screenView = IPodScreenView()
     private let clickWheel = ClickWheelView()
@@ -50,8 +51,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             }
         }
 
-        screenView.onSeekRatioChanged = { [weak self] ratio in
-            self?.seekToRatio(ratio)
+        screenView.onSeekRatioChanged = { [weak self] ratio, isFinished in
+            self?.seekToRatio(ratio, isFinished: isFinished)
         }
 
         screenView.onActiveCoverImageChanged = { [weak self] image in
@@ -69,20 +70,30 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         super.viewDidLayoutSubviews()
         bodyGradient.frame = view.bounds
 
-        // Pendaran cahaya seamless dari pojok kiri bawah hingga kanan bawah LCD dan menyebar lebar ke bawah di belakang Click Wheel
-        let glowTopY = screenView.frame.maxY - 12
-        let glowHeight = max(140, view.bounds.height - glowTopY)
+        // Pancaran cahaya memanjang dari bagian bawah LCD hingga ke bawah Click Wheel
+        let glowTopY = screenView.frame.maxY - 10
+        let glowHeight = max(180, view.bounds.height - glowTopY)
         bottomGlowLayer.frame = CGRect(x: 0, y: glowTopY, width: view.bounds.width, height: glowHeight)
     }
 
     private func setupBodyAndLayout() {
         view.layer.insertSublayer(bodyGradient, at: 0)
 
-        // Gradasi cahaya halus tanpa batas garis/kotak (seamless dari kiri ke kanan bawah LCD)
-        bottomGlowLayer.locations = [0.0, 0.22, 0.65, 1.0]
+        // Gradasi cahaya halus yang memanjang sampai ke bawah Click Wheel
+        bottomGlowLayer.locations = [0.0, 0.22, 0.72, 1.0]
         bottomGlowLayer.startPoint = CGPoint(x: 0.5, y: 0.0)
         bottomGlowLayer.endPoint = CGPoint(x: 0.5, y: 1.0)
         view.layer.insertSublayer(bottomGlowLayer, at: 1)
+
+        // Cahaya memudar di sekeliling LCD (atas, kiri, kanan, dan bawah)
+        surroundGlowView.backgroundColor = currentGlowColor.withAlphaComponent(0.22)
+        surroundGlowView.layer.cornerRadius = 10
+        surroundGlowView.layer.shadowColor = currentGlowColor.cgColor
+        surroundGlowView.layer.shadowOpacity = 0.85
+        surroundGlowView.layer.shadowOffset = .zero
+        surroundGlowView.layer.shadowRadius = 26
+        surroundGlowView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(surroundGlowView)
 
         screenView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(screenView)
@@ -96,7 +107,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
-            // Posisi Click Wheel dikembalikan dan berada di atas lapisan cahaya ambient
+            surroundGlowView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: 2),
+            surroundGlowView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor, constant: -2),
+            surroundGlowView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor, constant: 2),
+            surroundGlowView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor, constant: -2),
+
             clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -42),
             clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.70),
@@ -130,8 +145,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     private func applyGlowColors(_ color: UIColor) {
-        let peakAlpha: CGFloat = (screenView.theme == .darkPod) ? 0.34 : 0.22
-        let midAlpha: CGFloat = (screenView.theme == .darkPod) ? 0.14 : 0.08
+        let peakAlpha: CGFloat = (screenView.theme == .darkPod) ? 0.36 : 0.22
+        let midAlpha: CGFloat = (screenView.theme == .darkPod) ? 0.18 : 0.10
+
+        surroundGlowView.backgroundColor = color.withAlphaComponent(peakAlpha * 0.65)
+        surroundGlowView.layer.shadowColor = color.cgColor
+
         bottomGlowLayer.colors = [
             UIColor.clear.cgColor,
             color.withAlphaComponent(peakAlpha).cgColor,
@@ -146,10 +165,9 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             : UIColor(red: 0.62, green: 0.42, blue: 0.22, alpha: 1.0))
 
         currentGlowColor = glowColor
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(0.45)
-        applyGlowColors(glowColor)
-        CATransaction.commit()
+        UIView.animate(withDuration: 0.45) {
+            self.applyGlowColors(glowColor)
+        }
     }
 
     private func extractDominantColor(from image: UIImage?) -> UIColor? {
@@ -524,7 +542,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         updateNowPlayingInfo(track: track, elapsed: 0)
     }
 
-    private func seekToRatio(_ ratio: Double) {
+    private func seekToRatio(_ ratio: Double, isFinished: Bool) {
         guard let player = player, currentQueue.indices.contains(currentTrackIndex) else { return }
         let track = currentQueue[currentTrackIndex]
         let itemDur = player.currentItem.map { CMTimeGetSeconds($0.duration) } ?? track.duration
@@ -533,7 +551,16 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         let targetSec = validDur * ratio
         let targetTime = CMTime(seconds: targetSec, preferredTimescale: 600)
-        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        let tolerance: CMTime = isFinished ? .zero : .positiveInfinity
+
+        player.seek(to: targetTime, toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] _ in
+            guard let self = self else { return }
+            // Pastikan lagu tetap berputar saat digeser jika sebelumnya sedang diputar
+            if self.isPlaying && player.rate == 0 {
+                player.play()
+            }
+        }
+
         screenView.updateProgress(elapsed: targetSec, duration: validDur)
         updateNowPlayingInfo(track: track, elapsed: targetSec)
     }
