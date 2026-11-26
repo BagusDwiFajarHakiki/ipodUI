@@ -183,7 +183,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     }
 
     var onCoverFlowTrackSelected: ((Int) -> Void)?
-    // Parameter kedua (isFinished) menandakan apakah jari masih menggeser atau sudah dilepas
     var onSeekRatioChanged: ((Double, Bool) -> Void)?
     var onActiveCoverImageChanged: ((UIImage?) -> Void)?
 
@@ -237,7 +236,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        // Sudut lancip dan tanpa garis pembatas putih di pinggir LCD
         layer.cornerRadius = 6
         layer.borderWidth = 0
         layer.borderColor = nil
@@ -927,9 +925,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lastDisplayedTrackId = track.id
     }
 
-    func updateProgress(elapsed: TimeInterval, duration: TimeInterval) {
+    func updateProgress(elapsed: TimeInterval, duration: TimeInterval, fromScrub: Bool = false) {
         let safeDur = max(duration, 1.0)
-        if !isScrubbing {
+        if isScrubbing && !fromScrub { return }
+        if !fromScrub {
             let ratio = CGFloat(min(max(elapsed / safeDur, 0.0), 1.0))
             progressWidthConstraint.constant = progressTrack.bounds.width * ratio
         }
