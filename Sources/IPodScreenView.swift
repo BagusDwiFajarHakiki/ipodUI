@@ -103,7 +103,7 @@ class IPodMenuCell: UITableViewCell {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-// MARK: - Cover Flow Cell (7 Sampul Berjejer + Efek Cermin Panjang ke Belakang Judul)
+// MARK: - Cover Flow Cell
 class IPodCoverFlowCell: UICollectionViewCell {
     let coverImageView = UIImageView()
     let reflectionImageView = UIImageView()
@@ -128,7 +128,6 @@ class IPodCoverFlowCell: UICollectionViewCell {
         reflectionImageView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(reflectionImageView)
 
-        // Gradasi mask dari bawah ke atas (karena view terbalik secara vertikal) agar cermin memanjang sampai ke belakang teks
         reflectionMask.colors = [
             UIColor.clear.cgColor,
             UIColor(white: 1.0, alpha: 0.45).cgColor,
@@ -184,7 +183,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private var rows: [IPodMenuRow] = []
     private(set) var selectedIndex: Int = 0
 
-    // Horizontal Cover Flow View (7 Sampul: 3 Kiri, 1 Tengah, 3 Kanan)
+    // Horizontal Cover Flow View (3 Kiri, 1 Tengah, 3 Kanan rapat tanpa celah)
     private let coverFlowContainer = UIView()
     private var coverCollectionView: UICollectionView!
     private let coverTitleLabel = UILabel()
@@ -192,7 +191,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private var coverTracks: [IPodTrack] = []
     private(set) var isCoverFlowActive = false
     private let coverItemWidth: CGFloat = 92
-    private let coverItemSpacing: CGFloat = -50 // Overlap rapat agar tampil 3 kiri, 1 tengah, 3 kanan
+    private let coverItemSpacing: CGFloat = -54 // Jarak rapat (stride 38pt) sehingga 7 sampul tersusun padat tanpa gang kosong
 
     // Now Playing View
     private let nowPlayingContainer = UIView()
@@ -224,7 +223,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     required init?(coder: NSCoder) { fatalError() }
 
     private func setupUI() {
-        // Header Bar
         headerBar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(headerBar)
 
@@ -284,7 +282,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverCollectionView.translatesAutoresizingMaskIntoConstraints = false
         coverFlowContainer.addSubview(coverCollectionView)
 
-        // Judul & Artis berada di depan bagian bawah efek cermin
         coverTitleLabel.font = UIFont.systemFont(ofSize: 13, weight: .bold)
         coverTitleLabel.textAlignment = .center
         coverTitleLabel.lineBreakMode = .byTruncatingTail
@@ -329,7 +326,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         trackAlbumLabel.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(trackAlbumLabel)
 
-        // Area sentuh yang nyaman untuk menggeser baris durasi dengan jari
         progressTouchArea.backgroundColor = .clear
         progressTouchArea.isUserInteractionEnabled = true
         progressTouchArea.translatesAutoresizingMaskIntoConstraints = false
@@ -509,7 +505,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverCollectionView.reloadData()
     }
 
-    // MARK: - Touchscreen Scrubbing untuk Baris Durasi Lagu
+    // MARK: - Touchscreen Scrubbing
     @objc private func handleProgressTap(_ gesture: UITapGestureRecognizer) {
         let pt = gesture.location(in: progressTrack)
         let width = max(progressTrack.bounds.width, 1.0)
@@ -556,46 +552,104 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     func showSongsCoverFlow(title: String, tracks: [IPodTrack], selectedIndex: Int = 0, animateFromNowPlaying: Bool = false) {
         let wasNowPlaying = !nowPlayingContainer.isHidden
+        let sourceArtworkFrame = artworkView.convert(artworkView.bounds, to: self)
+        let sourceArtworkImage = artworkView.image
+
         headerTitleLabel.text = title
         self.coverTracks = tracks
         self.selectedIndex = min(max(0, selectedIndex), max(0, tracks.count - 1))
         self.isCoverFlowActive = true
+
         nowPlayingContainer.isHidden = true
         tableView.isHidden = true
         coverFlowContainer.isHidden = false
+
+        // Paksa layout selesai terlebih dahulu agar semua sel langsung ter-transform 3D dan tidak tampil menghadap depan semua
+        setNeedsLayout()
         layoutIfNeeded()
         coverCollectionView.reloadData()
+        coverCollectionView.layoutIfNeeded()
 
         if !tracks.isEmpty {
-            scrollCoverFlowToIndex(self.selectedIndex, animated: false)
+            scrollCoverFlowToIndex(self.selectedIndex, animated: false, bounceDirection: 0)
             updateCoverFlowCaption(for: self.selectedIndex)
-            DispatchQueue.main.async {
-                self.applyCoverFlowTransforms()
-            }
+            coverCollectionView.layoutIfNeeded()
+            applyCoverFlowTransforms()
         } else {
             coverTitleLabel.text = "Tidak ada lagu"
             coverArtistLabel.text = "Sinkronkan lagu ke Music/Documents"
         }
 
-        // Animasi mulus saat keluar dari halaman Now Playing kembali ke barisan sampul Cover Flow
-        if animateFromNowPlaying && wasNowPlaying {
+        // Animasi seamless sampul Now Playing melayang dan menyatu ke tengah atas barisan Cover Flow
+        if animateFromNowPlaying && wasNowPlaying && !tracks.isEmpty {
+            let targetCenterX = bounds.width / 2.0
+            let targetTopY: CGFloat = 26.0 + 4.0 + 6.0 // headerBar (26) + collectionTop (4) + cellCoverTop (6)
+            let targetFrame = CGRect(x: targetCenterX - 44.0, y: targetTopY, width: 88.0, height: 88.0)
+
+            let flyingCover = UIImageView(frame: sourceArtworkFrame)
+            flyingCover.image = sourceArtworkImage ?? makeDefaultNoteArtwork()
+            flyingCover.contentMode = .scaleAspectFill
+            flyingCover.clipsToBounds = true
+            flyingCover.layer.borderWidth = 1.0
+            flyingCover.layer.borderColor = UIColor(white: 0.72, alpha: 1.0).cgColor
+            addSubview(flyingCover)
+
+            // Sembunyikan sementara sel tengah agar tidak bertumpuk selama sampul melayang
+            let centerIndexPath = IndexPath(item: self.selectedIndex, section: 0)
+            let centerCell = coverCollectionView.cellForItem(at: centerIndexPath)
+            centerCell?.alpha = 0.0
+
             coverFlowContainer.alpha = 0.0
-            coverFlowContainer.transform = CGAffineTransform(scaleX: 1.18, y: 1.18)
-            UIView.animate(withDuration: 0.30, delay: 0, options: [.curveEaseOut], animations: {
-                self.coverFlowContainer.alpha = 1.0
-                self.coverFlowContainer.transform = .identity
-            })
+            coverFlowContainer.transform = CGAffineTransform(scaleX: 0.90, y: 0.90)
+
+            UIView.animate(
+                withDuration: 0.36,
+                delay: 0,
+                usingSpringWithDamping: 0.84,
+                initialSpringVelocity: 0.3,
+                options: [.curveEaseOut],
+                animations: {
+                    flyingCover.frame = targetFrame
+                    self.coverFlowContainer.alpha = 1.0
+                    self.coverFlowContainer.transform = .identity
+                },
+                completion: { _ in
+                    centerCell?.alpha = 1.0
+                    flyingCover.removeFromSuperview()
+                    self.applyCoverFlowTransforms()
+                }
+            )
         }
     }
 
-    private func scrollCoverFlowToIndex(_ index: Int, animated: Bool) {
-        let stepStride = coverItemWidth + coverItemSpacing // 92 + (-50) = 42pt per item
+    private func scrollCoverFlowToIndex(_ index: Int, animated: Bool, bounceDirection: Int) {
+        let stepStride = coverItemWidth + coverItemSpacing // 92 + (-54) = 38pt per slot
         let targetX = CGFloat(index) * stepStride
-        coverCollectionView.setContentOffset(CGPoint(x: targetX, y: 0), animated: animated)
-        applyCoverFlowTransforms()
+
+        if animated && bounceDirection != 0 {
+            let overshoot = CGFloat(bounceDirection) * 7.0
+            UIView.animate(withDuration: 0.14, delay: 0, options: [.curveEaseOut, .allowUserInteraction], animations: {
+                self.coverCollectionView.contentOffset = CGPoint(x: targetX + overshoot, y: 0)
+                self.applyCoverFlowTransforms()
+            }, completion: { _ in
+                UIView.animate(
+                    withDuration: 0.24,
+                    delay: 0,
+                    usingSpringWithDamping: 0.62,
+                    initialSpringVelocity: 0.8,
+                    options: [.curveEaseOut, .allowUserInteraction],
+                    animations: {
+                        self.coverCollectionView.contentOffset = CGPoint(x: targetX, y: 0)
+                        self.applyCoverFlowTransforms()
+                    }
+                )
+            })
+        } else {
+            coverCollectionView.contentOffset = CGPoint(x: targetX, y: 0)
+            applyCoverFlowTransforms()
+        }
     }
 
-    // Perbaikan kecepatan scroll wheel: langsung geser offset tanpa animasi antrean yang membuat macet saat diputar cepat
     func moveSelection(by delta: Int) {
         guard nowPlayingContainer.isHidden else { return }
 
@@ -603,8 +657,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             guard !coverTracks.isEmpty else { return }
             let next = min(max(0, selectedIndex + delta), coverTracks.count - 1)
             if next != selectedIndex {
+                let direction = next > selectedIndex ? 1 : -1
                 selectedIndex = next
-                scrollCoverFlowToIndex(selectedIndex, animated: false)
+                // Putar 1 langkah pelan mendapat efek bouncing pegas; putar cepat (>1 langkah) langsung meluncur mulus
+                scrollCoverFlowToIndex(selectedIndex, animated: abs(delta) == 1, bounceDirection: direction)
                 updateCoverFlowCaption(for: selectedIndex)
             }
             return
@@ -629,36 +685,43 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private func applyCoverFlowTransforms() {
         guard isCoverFlowActive else { return }
         let centerX = coverCollectionView.contentOffset.x + coverCollectionView.bounds.width / 2.0
-        let stepStride = coverItemWidth + coverItemSpacing // 42pt per slot
+        let stepStride = coverItemWidth + coverItemSpacing // 38pt per slot
 
         for cell in coverCollectionView.visibleCells {
             let distance = cell.center.x - centerX
-            // Jangkauan 3 kiri (-3) hingga 3 kanan (+3)
-            let slotOffset = max(-3.5, min(3.5, distance / stepStride))
+            let slotOffset = max(-3.6, min(3.6, distance / stepStride))
             let absSlot = abs(slotOffset)
+            let sign: CGFloat = slotOffset >= 0 ? 1.0 : -1.0
 
             var transform = CATransform3DIdentity
-            transform.m34 = -1.0 / 380.0
+            transform.m34 = -1.0 / 360.0
 
-            // Sampul tengah menghadap lurus (0 rad), sampul kiri & kanan miring masuk seperti Cover Flow
+            // Sampul tengah menghadap lurus (0 rad); sampul ke-1, ke-2, dan ke-3 miring konsisten
             let angle: CGFloat
-            if absSlot < 0.25 {
-                angle = -slotOffset * 1.8
+            if absSlot < 0.20 {
+                angle = -slotOffset * 2.2
             } else {
-                angle = (slotOffset > 0 ? -1.0 : 1.0) * min(.pi / 2.4, 0.78 + (absSlot - 0.25) * 0.14)
+                angle = -sign * min(.pi / 2.35, 0.84 + (absSlot - 0.20) * 0.10)
             }
 
-            let scale = max(0.68, 1.0 - (absSlot * 0.085))
-            let shiftX = (slotOffset > 0 ? 1.0 : -1.0) * min(absSlot, 1.0) * 16.0
+            // Skala mengecil bertahap namun tetap proporsional sampai sampul ke-3
+            let scale = max(0.76, 1.0 - (absSlot * 0.065))
 
-            transform = CATransform3DTranslate(transform, shiftX, 0, -absSlot * 28.0)
+            // Tarik masuk bertahap untuk slot 1, 2, dan 3 agar tidak ada gang kosong di antara sampul pinggir
+            let pullIn: CGFloat
+            if absSlot <= 1.0 {
+                pullIn = sign * absSlot * 16.0
+            } else {
+                pullIn = sign * (16.0 + (absSlot - 1.0) * 6.5)
+            }
+
+            transform = CATransform3DTranslate(transform, pullIn, 0, -absSlot * 24.0)
             transform = CATransform3DRotate(transform, angle, 0, 1, 0)
             transform = CATransform3DScale(transform, scale, scale, 1.0)
 
             cell.layer.transform = transform
-            // Pastikan sampul tengah selalu berada paling depan (zPosition tertinggi)
             cell.layer.zPosition = 200 - (absSlot * 30)
-            cell.alpha = absSlot > 3.2 ? max(0, 1.0 - (absSlot - 3.2) * 2.5) : 1.0
+            cell.alpha = absSlot > 3.25 ? max(0, 1.0 - (absSlot - 3.25) * 2.5) : 1.0
         }
     }
 
@@ -676,7 +739,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         let nextImage = track.artworkImage ?? makeDefaultNoteArtwork()
 
-        // Animasi berputar 3D saat ganti lagu di halaman pemutaran
         if transitionDirection != 0 && lastDisplayedTrackId != track.id {
             let dir: CGFloat = transitionDirection > 0 ? 1.0 : -1.0
             var startTransform = CATransform3DIdentity
@@ -759,12 +821,17 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         return cell
     }
 
+    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        applyCoverFlowTransforms()
+    }
+
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         if indexPath.item == selectedIndex {
             onCoverFlowTrackSelected?(indexPath.item)
         } else {
+            let direction = indexPath.item > selectedIndex ? 1 : -1
             selectedIndex = indexPath.item
-            scrollCoverFlowToIndex(selectedIndex, animated: true)
+            scrollCoverFlowToIndex(selectedIndex, animated: true, bounceDirection: direction)
             updateCoverFlowCaption(for: selectedIndex)
         }
     }
