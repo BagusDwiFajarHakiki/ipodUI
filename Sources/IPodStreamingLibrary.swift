@@ -24,6 +24,24 @@ final class IPodStreamingLibrary {
         loadSeedTracks()
     }
 
+    private func makeTrack(
+        title: String,
+        artist: String,
+        album: String,
+        duration: TimeInterval,
+        assetURL: URL?,
+        artworkImage: UIImage?
+    ) -> IPodTrack {
+        return IPodTrack(
+            title: title,
+            artist: artist,
+            album: album,
+            duration: duration,
+            assetURL: assetURL,
+            artworkImage: artworkImage
+        )
+    }
+
     func refreshTracks(completion: @escaping (Bool) -> Void) {
         if let url = URL(string: remoteFeedURLString), !remoteFeedURLString.isEmpty {
             let task = URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
@@ -34,7 +52,7 @@ final class IPodStreamingLibrary {
                     let mapped = decoded.compactMap { item -> IPodTrack? in
                         guard let audioURL = URL(string: item.streamURL) else { return nil }
                         let art = self.makeArtwork(title: item.title, artist: item.artist, genre: item.genre)
-                        return IPodTrack(
+                        return self.makeTrack(
                             title: item.title,
                             artist: item.artist,
                             album: item.album,
@@ -137,7 +155,7 @@ final class IPodStreamingLibrary {
             let cycle = idx / presets.count
             let title = cycle == 0 ? base.title : "\(base.title) \(cycle + 1)"
             let art = makeArtwork(title: title, artist: base.artist, genre: base.genre)
-            let track = IPodTrack(
+            let track = makeTrack(
                 title: title,
                 artist: base.artist,
                 album: base.album,
