@@ -263,6 +263,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     var onSeekRatioChanged: ((Double, Bool) -> Void)?
     var onActiveCoverImageChanged: ((UIImage?) -> Void)?
     var onStreamingRefreshTapped: (() -> Void)?
+    var onStreamingSearchTapped: (() -> Void)?
 
     // Modern Seamless Status Bar
     private let headerBar = UIView()
@@ -290,6 +291,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     // Horizontal Cover Flow View
     private enum CoverFlowItem {
         case track(IPodTrack)
+        case search
         case refresh
     }
 
@@ -303,12 +305,19 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let coverLoadingLabel = UILabel()
     private var coverTracks: [IPodTrack] = []
     private var coverItems: [CoverFlowItem] = []
-    private var hasLeadingRefresh = false
+    private var hasLeadingSearch = false
+    private var activeSearchQuery: String?
     private(set) var isCoverFlowActive = false
     private let coverItemWidth: CGFloat = 104
     private let coverItemSpacing: CGFloat = -60
     private var displayLink: CADisplayLink?
     private var targetCoverOffsetX: CGFloat = 0
+
+    var isSearchItemSelected: Bool {
+        guard isCoverFlowActive, coverItems.indices.contains(selectedIndex) else { return false }
+        if case .search = coverItems[selectedIndex] { return true }
+        return false
+    }
 
     var isRefreshItemSelected: Bool {
         guard isCoverFlowActive, coverItems.indices.contains(selectedIndex) else { return false }
@@ -319,7 +328,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     var selectedCoverTrackIndex: Int? {
         guard isCoverFlowActive, coverItems.indices.contains(selectedIndex) else { return nil }
         if case .track = coverItems[selectedIndex] {
-            let idx = selectedIndex - (hasLeadingRefresh ? 1 : 0)
+            let idx = selectedIndex - (hasLeadingSearch ? 1 : 0)
             return coverTracks.indices.contains(idx) ? idx : nil
         }
         return nil
@@ -863,7 +872,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         headerTitleLabel.text = title
         coverTracks = []
         coverItems = []
-        hasLeadingRefresh = false
+        hasLeadingSearch = false
         selectedIndex = 0
         isCoverFlowActive = true
 
@@ -887,7 +896,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         tracks: [IPodTrack],
         selectedIndex: Int = 0,
         animateFromNowPlaying: Bool = false,
-        showStreamingRefresh: Bool = false
+        showStreamingRefresh: Bool = false,
+        searchQuery: String? = nil
     ) {
         stopSmoothScrollDisplayLink()
         let wasNowPlaying = !nowPlayingContainer.isHidden
@@ -897,12 +907,13 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         headerTitleLabel.text = title
         self.coverTracks = tracks
-        self.hasLeadingRefresh = showStreamingRefresh
+        self.hasLeadingSearch = showStreamingRefresh
+        self.activeSearchQuery = searchQuery
         if showStreamingRefresh {
             if tracks.isEmpty {
-                self.coverItems = [.refresh]
+                self.coverItems = [.search, .refresh]
             } else {
-                self.coverItems = [.refresh] + tracks.map { .track($0) } + [.refresh]
+                self.coverItems = [.search] + tracks.map { .track($0) } + [.refresh]
             }
         } else {
             self.coverItems = tracks.map { .track($0) }
@@ -1000,7 +1011,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                 artworkImage: image
             )
             coverTracks[tIdx] = updated
-            let itemIdx = tIdx + (hasLeadingRefresh ? 1 : 0)
+            let itemIdx = tIdx + (hasLeadingSearch ? 1 : 0)
             if coverItems.indices.contains(itemIdx) {
                 coverItems[itemIdx] = .track(updated)
                 let ip = IndexPath(item: itemIdx, section: 0)
@@ -1097,6 +1108,15 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             coverTitleLabel.text = track.title
             coverArtistLabel.text = track.artist
             onActiveCoverImageChanged?(track.artworkImage)
+        case .search:
+            if let q = activeSearchQuery, !q.isEmpty {
+                coverTitleLabel.text = "Cari: \(q)"
+                coverArtistLabel.text = "Judul, artis, atau album"
+            } else {
+                coverTitleLabel.text = "Cari Lagu"
+                coverArtistLabel.text = "Judul, artis, atau album"
+            }
+            onActiveCoverImageChanged?(nil)
         case .refresh:
             coverTitleLabel.text = "Refresh Lagu"
             coverArtistLabel.text = "Muat ulang daftar lagu baru"
@@ -1373,6 +1393,42 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         return cell
     }
 
+    private func makeSearchCoverImage() -> UIImage? {
+        let size = CGSize(width: 100, height: 100)
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        defer { UIGraphicsEndImageContext() }
+
+        let glyphColor: UIColor = theme == .darkPod
+            ? UIColor(white: 0.92, alpha: 1.0)
+            : theme.primaryText
+
+        let lensCenter = CGPoint(x: 45.0, y: 45.0)
+        let lensRadius: CGFloat = 15.0
+        let lensPath = UIBezierPath(
+            arcCenter: lensCenter,
+            radius: lensRadius,
+            startAngle: 0,
+            endAngle: .pi * 2.0,
+            clockwise: true
+        )
+        lensPath.lineWidth = 3.6
+        glyphColor.setStroke()
+        lensPath.stroke()
+
+        let handlePath = UIBezierPath()
+        let angle: CGFloat = .pi * 0.25
+        handlePath.move(to: CGPoint(
+            x: lensCenter.x + lensRadius * cos(angle),
+            y: lensCenter.y + lensRadius * sin(angle)
+        ))
+        handlePath.addLine(to: CGPoint(x: 68.0, y: 68.0))
+        handlePath.lineWidth = 4.2
+        handlePath.lineCapStyle = .round
+        handlePath.stroke()
+
+        return UIGraphicsGetImageFromCurrentImageContext()
+    }
+
     private func makeRefreshCoverImage() -> UIImage? {
         let size = CGSize(width: 100, height: 100)
         UIGraphicsBeginImageContextWithOptions(size, false, 0)
@@ -1427,6 +1483,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         switch coverItems[indexPath.item] {
         case .track(let track):
             cell.configure(image: track.artworkImage ?? makeDefaultNoteArtwork(), showReflection: true)
+        case .search:
+            cell.configure(image: makeSearchCoverImage(), showReflection: false)
         case .refresh:
             cell.configure(image: makeRefreshCoverImage(), showReflection: false)
         }
@@ -1441,10 +1499,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         if indexPath.item == selectedIndex {
             guard coverItems.indices.contains(indexPath.item) else { return }
             switch coverItems[indexPath.item] {
+            case .search:
+                onStreamingSearchTapped?()
             case .refresh:
                 onStreamingRefreshTapped?()
             case .track:
-                let trackIdx = indexPath.item - (hasLeadingRefresh ? 1 : 0)
+                let trackIdx = indexPath.item - (hasLeadingSearch ? 1 : 0)
                 if coverTracks.indices.contains(trackIdx) {
                     onCoverFlowTrackSelected?(trackIdx)
                 }

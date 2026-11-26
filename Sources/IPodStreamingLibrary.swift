@@ -157,6 +157,93 @@ final class IPodStreamingLibrary {
         fetchSongsFromInnerTube(reshuffle: true, completion: completion)
     }
 
+    func searchSongs(query: String, completion: @escaping (Bool) -> Void) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            refreshTracks(completion: completion)
+            return
+        }
+
+        isFetchingSongs = true
+        fetchGeneration += 1
+        let activeGen = fetchGeneration
+
+        let searchQueries = [
+            trimmed,
+            "\(trimmed) official audio",
+            "\(trimmed) album"
+        ]
+
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var buckets: [[InnerTubeSongEntry]] = Array(repeating: [], count: searchQueries.count)
+
+        for (i, q) in searchQueries.enumerated() {
+            group.enter()
+            let clients: [InnerTubeClient] = [.webRemix, .mweb, .iosMusic]
+            searchInnerTube(query: q, clients: clients, index: 0) { entries in
+                lock.lock()
+                buckets[i] = entries
+                lock.unlock()
+                group.leave()
+            }
+        }
+
+        group.notify(queue: .global(qos: .userInitiated)) { [weak self] in
+            guard let self = self else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+
+            var merged: [InnerTubeSongEntry] = []
+            var seenVideoIds = Set<String>()
+            for bucket in buckets {
+                for entry in bucket where !seenVideoIds.contains(entry.videoId) {
+                    seenVideoIds.insert(entry.videoId)
+                    merged.append(entry)
+                }
+            }
+
+            let cappedEntries = Array(merged.prefix(Self.pageSize))
+            var tracks: [IPodTrack] = []
+            var idMap: [String: String] = [:]
+            var thumbMap: [String: String] = [:]
+
+            for (idx, entry) in cappedEntries.enumerated() {
+                let trackId = "innertube_\(entry.videoId)_\(idx)"
+                let placeholderArt = self.placeholderArtwork(seed: entry.videoId)
+                let watchURL = URL(string: "https://m.youtube.com/watch?v=\(entry.videoId)")
+                let track = self.makeTrack(
+                    id: trackId,
+                    title: entry.title,
+                    artist: entry.artist,
+                    album: entry.album,
+                    duration: 210,
+                    assetURL: watchURL,
+                    artworkImage: placeholderArt
+                )
+                tracks.append(track)
+                idMap[trackId] = entry.videoId
+                if let tURL = entry.thumbnailURL {
+                    thumbMap[trackId] = tURL
+                }
+            }
+
+            DispatchQueue.main.async {
+                guard activeGen == self.fetchGeneration else {
+                    completion(!self.allStreamingTracks.isEmpty)
+                    return
+                }
+                self.isFetchingSongs = false
+                for (k, v) in idMap { self.videoIdByTrackId[k] = v }
+                for (k, v) in thumbMap { self.thumbnailURLByTrackId[k] = v }
+                self.allStreamingTracks = tracks
+                self.loadLowResThumbnailsAsync(for: self.allStreamingTracks, updateMainCatalog: true)
+                completion(!tracks.isEmpty)
+            }
+        }
+    }
+
     func fetchRecommendations(for track: IPodTrack, limit: Int = 20, completion: @escaping ([IPodTrack]) -> Void) {
         guard let videoId = videoIdByTrackId[track.id], !videoId.isEmpty,
               let endpoint = URL(string: "https://www.youtube.com/youtubei/v1/next?prettyPrint=false") else {
@@ -635,8 +722,8 @@ final class IPodStreamingLibrary {
             let lower = part.lowercased()
             if ignoredExact.contains(lower) { continue }
             if ignoredContains.contains(where: { lower.contains($0) }) { continue }
-            // Skip pure durations (e.g. "3:45") or 4-digit release years (e.g. "2024")
-            if part.range(of: #"^\d{1,2}(:\d{2})+$"#, options: .regularExpression) != nil { continue }
+            // Skip pure durations (e.g. "3:45" or "3.45") or 4-digit release years (e.g. "2024")
+            if part.range(of: #"^\d{1,2}([:.]\d{2})+$"#, options: .regularExpression) != nil { continue }
             if part.range(of: #"^\d{4}$"#, options: .regularExpression) != nil { continue }
             return part
         }

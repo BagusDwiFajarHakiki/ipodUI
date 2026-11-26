@@ -21,6 +21,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var menuStack: [(node: IPodMenuNode, selectedIndex: Int)] = [(.root, 0)]
     private var isNowPlayingActive = false
     private var isNowPlayingVolumeMode = false
+    private var activeStreamingSearchQuery: String?
     private var isPlaylistsMenuEnabled: Bool = true
     private var currentGlowColor = UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
     private var playingTrackArtwork: UIImage?
@@ -100,6 +101,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         screenView.onStreamingRefreshTapped = { [weak self] in
             self?.refreshStreamingList()
+        }
+
+        screenView.onStreamingSearchTapped = { [weak self] in
+            self?.presentStreamingSearchPopup()
         }
 
         IPodStreamingLibrary.shared.onTrackArtworkLoaded = { [weak self] trackId, image in
@@ -402,6 +407,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     private func loadStreamingCatalog(showLoading: Bool = true) {
+        activeStreamingSearchQuery = nil
         if showLoading {
             screenView.showCoverFlowLoading(title: "Streaming")
         }
@@ -421,6 +427,48 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private func refreshStreamingList() {
         loadStreamingCatalog(showLoading: true)
+    }
+
+    private func presentStreamingSearchPopup() {
+        let alert = UIAlertController(
+            title: "Cari Lagu",
+            message: "Masukkan judul lagu, nama artis, atau album:",
+            preferredStyle: .alert
+        )
+        alert.addTextField { tf in
+            tf.placeholder = "Contoh: Tulus, Lover, Paper Rings"
+            tf.autocapitalizationType = .words
+            tf.clearButtonMode = .whileEditing
+            tf.returnKeyType = .search
+        }
+        alert.addAction(UIAlertAction(title: "Cari", style: .default) { [weak self] _ in
+            let raw = alert.textFields?.first?.text ?? ""
+            let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !query.isEmpty else { return }
+            self?.performStreamingSearch(query: query)
+        })
+        alert.addAction(UIAlertAction(title: "Batal", style: .cancel))
+        present(alert, animated: true)
+    }
+
+    private func performStreamingSearch(query: String) {
+        activeStreamingSearchQuery = query
+        screenView.showCoverFlowLoading(title: "Cari: \(query)")
+        IPodStreamingLibrary.shared.searchSongs(query: query) { [weak self] found in
+            guard let self = self else { return }
+            guard let top = self.menuStack.last, case .streamingSongs = top.node, !self.isNowPlayingActive else {
+                return
+            }
+            let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: 0)
+            let initialIndex = pageData.tracks.isEmpty ? 0 : 1
+            self.menuStack[self.menuStack.count - 1] = (.streamingSongs(pageIndex: 0), initialIndex)
+            self.renderTopMenu(restoreIndex: initialIndex)
+            self.view.setNeedsLayout()
+            self.view.layoutIfNeeded()
+            if !found {
+                self.screenView.showStatusBanner("Lagu tidak ditemukan untuk \"\(query)\"")
+            }
+        }
     }
 
     private func triggerShuffleLocalSongs(tracks: [IPodTrack]) {
@@ -583,20 +631,22 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         if case .streamingSongs(let pageIndex) = top.node {
+            let baseTitle = activeStreamingSearchQuery.map { "Cari: \($0)" } ?? "Streaming"
             if IPodStreamingLibrary.shared.isFetchingSongs {
-                screenView.showCoverFlowLoading(title: "Streaming")
+                screenView.showCoverFlowLoading(title: baseTitle)
                 return
             }
             let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
             let header = pageData.totalPages > 1
-                ? "Streaming (\(pageData.currentPage + 1)/\(pageData.totalPages))"
-                : "Streaming"
+                ? "\(baseTitle) (\(pageData.currentPage + 1)/\(pageData.totalPages))"
+                : baseTitle
             screenView.showSongsCoverFlow(
                 title: header,
                 tracks: pageData.tracks,
                 selectedIndex: restoreIndex,
                 animateFromNowPlaying: animateFromNowPlaying,
-                showStreamingRefresh: true
+                showStreamingRefresh: true,
+                searchQuery: activeStreamingSearchQuery
             )
             return
         }
@@ -762,6 +812,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             }
 
         case .streamingSongs(let pageIndex):
+            if screenView.isSearchItemSelected {
+                presentStreamingSearchPopup()
+                return
+            }
             if screenView.isRefreshItemSelected {
                 refreshStreamingList()
                 return
