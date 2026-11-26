@@ -70,8 +70,8 @@ class ClickWheelView: UIView {
         let iconTint: UIColor
         switch theme {
         case .darkPod:
-            wheelLayer.fillColor = UIColor(red: 0.14, green: 0.14, blue: 0.16, alpha: 1.0).cgColor
-            centerButton.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0)
+            wheelLayer.fillColor = UIColor(red: 0.06, green: 0.06, blue: 0.08, alpha: 1.0).cgColor
+            centerButton.backgroundColor = UIColor(red: 0.15, green: 0.15, blue: 0.17, alpha: 1.0)
             iconTint = UIColor(white: 0.90, alpha: 1.0)
 
         case .sepiaPod:

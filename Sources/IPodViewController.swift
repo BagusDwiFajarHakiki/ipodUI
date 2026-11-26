@@ -235,9 +235,9 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             mirrorContainerView.bottomAnchor.constraint(equalTo: clickWheel.centerYAnchor, constant: 22),
 
             mirrorReflectionImageView.topAnchor.constraint(equalTo: mirrorContainerView.topAnchor),
-            mirrorReflectionImageView.bottomAnchor.constraint(equalTo: mirrorContainerView.bottomAnchor),
             mirrorReflectionImageView.leadingAnchor.constraint(equalTo: mirrorContainerView.leadingAnchor),
             mirrorReflectionImageView.trailingAnchor.constraint(equalTo: mirrorContainerView.trailingAnchor),
+            mirrorReflectionImageView.heightAnchor.constraint(equalTo: mirrorContainerView.widthAnchor),
 
             clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -44),
             clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -288,13 +288,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         let hColors = [
             UIColor.white.withAlphaComponent(0.0).cgColor,
-            UIColor.white.withAlphaComponent(0.45).cgColor,
+            UIColor.white.withAlphaComponent(0.55).cgColor,
             UIColor.white.withAlphaComponent(1.0).cgColor,
             UIColor.white.withAlphaComponent(1.0).cgColor,
-            UIColor.white.withAlphaComponent(0.45).cgColor,
+            UIColor.white.withAlphaComponent(0.55).cgColor,
             UIColor.white.withAlphaComponent(0.0).cgColor
         ] as CFArray
-        let hLocations: [CGFloat] = [0.0, 0.10, 0.24, 0.76, 0.90, 1.0]
+        let hLocations: [CGFloat] = [0.0, 0.02, 0.07, 0.93, 0.98, 1.0]
 
         if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
             ctx.drawLinearGradient(
@@ -333,8 +333,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         switch theme {
         case .darkPod:
             bodyGradient.colors = [
-                UIColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0).cgColor,
-                UIColor(red: 0.04, green: 0.04, blue: 0.05, alpha: 1.0).cgColor
+                UIColor(red: 0.17, green: 0.17, blue: 0.19, alpha: 1.0).cgColor,
+                UIColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1.0).cgColor
             ]
         case .sepiaPod:
             bodyGradient.colors = [
