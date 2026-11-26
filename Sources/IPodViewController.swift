@@ -240,43 +240,55 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         haloPath.fill()
         ctx.restoreGState()
 
-        // 2. Rectangular light wash matching the LCD's exact width, blending from the LCD's bottom edge
-        //    downward until past the scroll wheel.
-        let downTopY = max(0.0, lcdRect.maxY - 26.0)
-        let downBottomY = min(h, wheelRect.maxY + 28.0)
+        // 2. Soft rectangular light column matching the LCD width, fading smoothly on left, right,
+        //    and downward until roughly halfway across the scroll wheel.
+        let downTopY = max(0.0, lcdRect.maxY - 24.0)
+        let downBottomY = min(h, wheelRect.midY + 24.0)
         let downHeight = downBottomY - downTopY
         if downHeight > 4.0 {
             ctx.saveGState()
             ctx.beginTransparencyLayer(auxiliaryInfo: nil)
 
-            let rectGlowFrame = CGRect(
-                x: lcdRect.minX + 1.0,
-                y: downTopY,
-                width: max(2.0, lcdRect.width - 2.0),
-                height: downHeight
-            )
-            let rectPath = UIBezierPath(roundedRect: rectGlowFrame, cornerRadius: 10.0)
-            ctx.saveGState()
-            ctx.setShadow(offset: .zero, blur: 18.0, color: UIColor.white.withAlphaComponent(0.72).cgColor)
-            UIColor.white.setFill()
-            rectPath.fill()
-            ctx.restoreGState()
+            let hLeftOut = max(0.0, (lcdRect.minX - 12.0) / w)
+            let hLeftEdge = max(hLeftOut + 0.02, min(0.42, (lcdRect.minX + 6.0) / w))
+            let hLeftIn = max(hLeftEdge + 0.03, min(0.48, (lcdRect.minX + 34.0) / w))
+            let hRightIn = max(0.52, min(0.95, (lcdRect.maxX - 34.0) / w))
+            let hRightEdge = max(hRightIn + 0.03, min(0.98, (lcdRect.maxX - 6.0) / w))
+            let hRightOut = min(1.0, max(hRightEdge + 0.02, (lcdRect.maxX + 12.0) / w))
+
+            let hColors = [
+                UIColor.white.withAlphaComponent(0.0).cgColor,
+                UIColor.white.withAlphaComponent(0.28).cgColor,
+                UIColor.white.withAlphaComponent(0.88).cgColor,
+                UIColor.white.withAlphaComponent(1.0).cgColor,
+                UIColor.white.withAlphaComponent(0.88).cgColor,
+                UIColor.white.withAlphaComponent(0.28).cgColor,
+                UIColor.white.withAlphaComponent(0.0).cgColor
+            ] as CFArray
+            let hLocations: [CGFloat] = [hLeftOut, hLeftEdge, hLeftIn, 0.5, hRightIn, hRightEdge, hRightOut]
+
+            if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
+                ctx.drawLinearGradient(
+                    hGrad,
+                    start: CGPoint(x: 0, y: downTopY + downHeight * 0.5),
+                    end: CGPoint(x: w, y: downTopY + downHeight * 0.5),
+                    options: []
+                )
+            }
 
             ctx.setBlendMode(.destinationIn)
-            let locLcdBottom = max(0.05, min(0.35, (lcdRect.maxY - downTopY) / downHeight))
-            let locWheelTop = max(locLcdBottom + 0.05, min(0.60, (wheelRect.minY - downTopY) / downHeight))
-            let locWheelMid = max(locWheelTop + 0.05, min(0.82, (wheelRect.midY - downTopY) / downHeight))
-            let locWheelBot = max(locWheelMid + 0.05, min(0.95, (wheelRect.maxY - downTopY) / downHeight))
+            let locLcdBottom = max(0.06, min(0.45, (lcdRect.maxY - downTopY) / downHeight))
+            let locWheelTop = max(locLcdBottom + 0.05, min(0.70, (wheelRect.minY - downTopY) / downHeight))
+            let locMidFade = max(locWheelTop + 0.05, min(0.90, (wheelRect.midY - 8.0 - downTopY) / downHeight))
 
             let vColors = [
                 UIColor.white.withAlphaComponent(0.0).cgColor,
-                UIColor.white.withAlphaComponent(0.58).cgColor,
-                UIColor.white.withAlphaComponent(0.48).cgColor,
-                UIColor.white.withAlphaComponent(0.34).cgColor,
-                UIColor.white.withAlphaComponent(0.14).cgColor,
+                UIColor.white.withAlphaComponent(0.54).cgColor,
+                UIColor.white.withAlphaComponent(0.36).cgColor,
+                UIColor.white.withAlphaComponent(0.12).cgColor,
                 UIColor.white.withAlphaComponent(0.0).cgColor
             ] as CFArray
-            let vLocations: [CGFloat] = [0.0, locLcdBottom, locWheelTop, locWheelMid, locWheelBot, 1.0]
+            let vLocations: [CGFloat] = [0.0, locLcdBottom, locWheelTop, locMidFade, 1.0]
 
             if let vGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: vColors, locations: vLocations) {
                 ctx.drawLinearGradient(
