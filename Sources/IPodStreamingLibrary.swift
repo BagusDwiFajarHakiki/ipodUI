@@ -93,6 +93,10 @@ final class IPodStreamingLibrary {
         fetchSongsFromInnerTube(reshuffle: true, completion: completion)
     }
 
+    func invalidateCachedURL(for track: IPodTrack) {
+        resolvedStreamURLCache.removeValue(forKey: track.id)
+    }
+
     func tracksPage(pageIndex: Int) -> (tracks: [IPodTrack], currentPage: Int, totalPages: Int, hasNextPage: Bool) {
         let total = allStreamingTracks.count
         guard total > 0 else {
@@ -145,8 +149,8 @@ final class IPodStreamingLibrary {
         return [selectedTrack] + ordered
     }
 
-    func resolvePlayableAudio(for track: IPodTrack, completion: @escaping (IPodStreamResolutionResult) -> Void) {
-        if let cached = resolvedStreamURLCache[track.id] {
+    func resolvePlayableAudio(for track: IPodTrack, forceRefresh: Bool = false, completion: @escaping (IPodStreamResolutionResult) -> Void) {
+        if !forceRefresh, let cached = resolvedStreamURLCache[track.id] {
             completion(.playable(cached))
             return
         }
