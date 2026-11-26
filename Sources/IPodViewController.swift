@@ -23,6 +23,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var isNowPlayingVolumeMode = false
     private var activeStreamingSearchQuery: String?
     private var isPlaylistsMenuEnabled: Bool = true
+    private var isAmbientGlowEnabled: Bool = true
     private var currentGlowColor = UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
     private var playingTrackArtwork: UIImage?
     private var lastGlowSize: CGSize = .zero
@@ -57,6 +58,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
         isPlaylistsMenuEnabled = UserDefaults.standard.object(forKey: "ipod_playlists_enabled") as? Bool ?? true
+        isAmbientGlowEnabled = UserDefaults.standard.object(forKey: "ipod_ambient_glow_enabled") as? Bool ?? true
         setupBodyAndLayout()
         applyThemeToBodyAndWheel()
         setupAudioSession()
@@ -316,6 +318,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     private func applyGlowColors(_ color: UIColor) {
+        guard isAmbientGlowEnabled else {
+            ambientGlowImageView.alpha = 0.0
+            return
+        }
         let isDark = (screenView.theme == .darkPod)
         ambientGlowImageView.tintColor = color
         ambientGlowImageView.alpha = isDark ? 0.85 : 0.52
@@ -408,7 +414,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         let nextIconName: String? = isLightAppIconActive ? nil : "AppIconLight"
         UIApplication.shared.setAlternateIconName(nextIconName) { [weak self] _ in
             DispatchQueue.main.async {
-                self?.renderTopMenu(restoreIndex: 2)
+                self?.renderTopMenu(restoreIndex: 3)
             }
         }
     }
@@ -460,7 +466,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private func performStreamingSearch(query: String) {
         activeStreamingSearchQuery = query
-        screenView.showCoverFlowLoading(title: "Cari: \(query)")
+        screenView.showCoverFlowLoading(title: query)
         IPodStreamingLibrary.shared.searchSongs(query: query) { [weak self] found in
             guard let self = self else { return }
             guard let top = self.menuStack.last, case .streamingSongs = top.node, !self.isNowPlayingActive else {
@@ -602,6 +608,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                     valueBadge: screenView.theme.displayName
                 ),
                 IPodMenuRow(
+                    title: "Ambient Glow",
+                    hasSubmenu: false,
+                    valueBadge: isAmbientGlowEnabled ? "ON" : "OFF",
+                    isPositiveToggle: isAmbientGlowEnabled
+                ),
+                IPodMenuRow(
                     title: "Playlists Menu",
                     hasSubmenu: false,
                     valueBadge: isPlaylistsMenuEnabled ? "ON" : "OFF",
@@ -638,7 +650,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         if case .streamingSongs(let pageIndex) = top.node {
-            let baseTitle = activeStreamingSearchQuery.map { "Cari: \($0)" } ?? "Streaming"
+            let baseTitle = activeStreamingSearchQuery ?? "Streaming"
             if IPodStreamingLibrary.shared.isFetchingSongs {
                 screenView.showCoverFlowLoading(title: baseTitle)
                 return
@@ -869,14 +881,21 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 }
                 renderTopMenu(restoreIndex: 0)
             } else if idx == 1 {
-                isPlaylistsMenuEnabled.toggle()
-                UserDefaults.standard.set(isPlaylistsMenuEnabled, forKey: "ipod_playlists_enabled")
+                isAmbientGlowEnabled.toggle()
+                UserDefaults.standard.set(isAmbientGlowEnabled, forKey: "ipod_ambient_glow_enabled")
+                UIView.animate(withDuration: 0.30) {
+                    self.applyGlowColors(self.currentGlowColor)
+                }
                 renderTopMenu(restoreIndex: 1)
             } else if idx == 2 {
-                toggleHomeScreenAppIcon()
+                isPlaylistsMenuEnabled.toggle()
+                UserDefaults.standard.set(isPlaylistsMenuEnabled, forKey: "ipod_playlists_enabled")
+                renderTopMenu(restoreIndex: 2)
             } else if idx == 3 {
+                toggleHomeScreenAppIcon()
+            } else if idx == 4 {
                 IPodMusicLibrary.shared.reloadAllSources()
-                renderTopMenu(restoreIndex: 3)
+                renderTopMenu(restoreIndex: 4)
             }
         }
     }

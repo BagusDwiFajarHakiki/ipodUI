@@ -1110,7 +1110,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             onActiveCoverImageChanged?(track.artworkImage)
         case .search:
             if let q = activeSearchQuery, !q.isEmpty {
-                coverTitleLabel.text = "Cari: \(q)"
+                coverTitleLabel.text = q
                 coverArtistLabel.text = "Judul, artis, atau album"
             } else {
                 coverTitleLabel.text = "Cari Lagu"
