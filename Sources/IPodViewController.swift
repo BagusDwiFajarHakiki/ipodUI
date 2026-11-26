@@ -760,7 +760,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             )
         }
 
-        if track.id.hasPrefix("innertube_") {
+        if track.id.hasPrefix("stream_") {
             IPodStreamingLibrary.shared.resolvePlayableAudio(for: track) { [weak self] result in
                 guard let self = self else { return }
                 guard self.currentQueue.indices.contains(self.currentTrackIndex),
@@ -787,12 +787,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     private func startAVPlayer(with url: URL, track: IPodTrack) {
-        let headers: [String: String] = [
-            "User-Agent": "com.google.ios.youtubemusic/6.42.1 (iPhone; U; CPU iPhone OS 12_5_8 like Mac OS X; en_US)"
-        ]
-        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-        let item = AVPlayerItem(asset: asset)
-
+        let item = AVPlayerItem(url: url)
         player = AVPlayer(playerItem: item)
         player?.play()
 
