@@ -269,7 +269,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let headerTitleLabel = UILabel()
     private let clockLabel = UILabel()
     private let playStateIcon = UILabel()
-    private let refreshButton = UIButton(type: .system)
     private let batteryView = UIView()
     private let batteryCapView = UIView()
     private let batteryFill = UIView()
@@ -288,17 +287,42 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private var isModernSettingsMenu = false
 
     // Horizontal Cover Flow View
+    private enum CoverFlowItem {
+        case track(IPodTrack)
+        case refresh
+    }
+
     private let coverFlowContainer = UIView()
     private var coverCollectionView: UICollectionView!
     private let coverCaptionStack = UIStackView()
     private let coverTitleLabel = UILabel()
     private let coverArtistLabel = UILabel()
+    private let coverLoadingStack = UIStackView()
+    private let coverLoadingSpinner = UIActivityIndicatorView(style: .whiteLarge)
+    private let coverLoadingLabel = UILabel()
     private var coverTracks: [IPodTrack] = []
+    private var coverItems: [CoverFlowItem] = []
+    private var hasLeadingRefresh = false
     private(set) var isCoverFlowActive = false
     private let coverItemWidth: CGFloat = 104
     private let coverItemSpacing: CGFloat = -60
     private var displayLink: CADisplayLink?
     private var targetCoverOffsetX: CGFloat = 0
+
+    var isRefreshItemSelected: Bool {
+        guard isCoverFlowActive, coverItems.indices.contains(selectedIndex) else { return false }
+        if case .refresh = coverItems[selectedIndex] { return true }
+        return false
+    }
+
+    var selectedCoverTrackIndex: Int? {
+        guard isCoverFlowActive, coverItems.indices.contains(selectedIndex) else { return nil }
+        if case .track = coverItems[selectedIndex] {
+            let idx = selectedIndex - (hasLeadingRefresh ? 1 : 0)
+            return coverTracks.indices.contains(idx) ? idx : nil
+        }
+        return nil
+    }
 
     // Now Playing View
     private let nowPlayingContainer = UIView()
@@ -357,13 +381,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         playStateIcon.textAlignment = .right
         playStateIcon.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(playStateIcon)
-
-        refreshButton.setTitle("↻", for: .normal)
-        refreshButton.titleLabel?.font = UIFont.systemFont(ofSize: 14, weight: .bold)
-        refreshButton.isHidden = true
-        refreshButton.addTarget(self, action: #selector(didTapRefreshButton), for: .touchUpInside)
-        refreshButton.translatesAutoresizingMaskIntoConstraints = false
-        headerBar.addSubview(refreshButton)
 
         batteryView.layer.borderWidth = 1.2
         batteryView.layer.cornerRadius = 3.5
@@ -434,6 +451,21 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverArtistLabel.textAlignment = .center
         coverArtistLabel.lineBreakMode = .byTruncatingTail
         coverCaptionStack.addArrangedSubview(coverArtistLabel)
+
+        coverLoadingStack.axis = .vertical
+        coverLoadingStack.alignment = .center
+        coverLoadingStack.spacing = 10
+        coverLoadingStack.isHidden = true
+        coverLoadingStack.translatesAutoresizingMaskIntoConstraints = false
+        coverFlowContainer.addSubview(coverLoadingStack)
+
+        coverLoadingSpinner.hidesWhenStopped = true
+        coverLoadingStack.addArrangedSubview(coverLoadingSpinner)
+
+        coverLoadingLabel.text = "Memuat lagu..."
+        coverLoadingLabel.font = UIFont.systemFont(ofSize: 12.5, weight: .semibold)
+        coverLoadingLabel.textAlignment = .center
+        coverLoadingStack.addArrangedSubview(coverLoadingLabel)
 
         // Now Playing Container
         nowPlayingContainer.isHidden = true
@@ -571,14 +603,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             batteryPercentLabel.leadingAnchor.constraint(equalTo: batteryView.leadingAnchor),
             batteryPercentLabel.trailingAnchor.constraint(equalTo: batteryView.trailingAnchor),
 
-            refreshButton.trailingAnchor.constraint(equalTo: batteryView.leadingAnchor, constant: -4),
-            refreshButton.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
-            refreshButton.widthAnchor.constraint(equalToConstant: 22),
-            refreshButton.heightAnchor.constraint(equalToConstant: 22),
-
-            playStateIcon.trailingAnchor.constraint(equalTo: refreshButton.leadingAnchor, constant: -2),
+            playStateIcon.trailingAnchor.constraint(equalTo: batteryView.leadingAnchor, constant: -6),
             playStateIcon.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
             playStateIcon.leadingAnchor.constraint(greaterThanOrEqualTo: clockLabel.trailingAnchor, constant: 4),
+
+            coverLoadingStack.centerXAnchor.constraint(equalTo: coverFlowContainer.centerXAnchor),
+            coverLoadingStack.centerYAnchor.constraint(equalTo: coverFlowContainer.centerYAnchor, constant: -6),
 
             tableView.topAnchor.constraint(equalTo: headerBar.bottomAnchor, constant: 4),
             tableView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -677,15 +707,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
     }
 
-    @objc private func didTapRefreshButton() {
-        UIView.animate(withDuration: 0.35) {
-            self.refreshButton.transform = CGAffineTransform(rotationAngle: .pi)
-        } completion: { _ in
-            self.refreshButton.transform = .identity
-        }
-        onStreamingRefreshTapped?()
-    }
-
     private func startClockTimer() {
         updateClockAndBattery()
         clockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -722,7 +743,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         if theme == .darkPod {
             headerSubtleTint.colors = [UIColor(white: 1.0, alpha: 0.06).cgColor, UIColor.clear.cgColor]
             playStateIcon.textColor = .white
-            refreshButton.tintColor = .white
+            coverLoadingSpinner.color = .white
             batteryView.layer.borderColor = UIColor(white: 0.90, alpha: 1.0).cgColor
             batteryCapView.backgroundColor = UIColor(white: 0.90, alpha: 1.0)
             batteryFill.backgroundColor = UIColor(white: 0.42, alpha: 1.0)
@@ -730,12 +751,14 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         } else {
             headerSubtleTint.colors = [UIColor(white: 0.0, alpha: 0.05).cgColor, UIColor.clear.cgColor]
             playStateIcon.textColor = theme.primaryText
-            refreshButton.tintColor = theme.primaryText
+            coverLoadingSpinner.color = theme.primaryText
             batteryView.layer.borderColor = theme.primaryText.withAlphaComponent(0.75).cgColor
             batteryCapView.backgroundColor = theme.primaryText.withAlphaComponent(0.75)
             batteryFill.backgroundColor = theme.highlightTop.withAlphaComponent(0.45)
             batteryPercentLabel.textColor = theme.primaryText
         }
+
+        coverLoadingLabel.textColor = theme.secondaryText
 
         coverTitleLabel.textColor = theme.primaryText
         coverArtistLabel.textColor = theme.secondaryText
@@ -777,8 +800,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     func showMenu(title: String, items: [IPodMenuRow], selectedIndex: Int = 0, isModernSettings: Bool = false, showStreamingRefresh: Bool = false) {
         stopSmoothScrollDisplayLink()
+        coverLoadingSpinner.stopAnimating()
+        coverLoadingStack.isHidden = true
         headerTitleLabel.text = title
-        refreshButton.isHidden = !showStreamingRefresh
         self.rows = items
         self.selectedIndex = min(max(0, selectedIndex), max(0, items.count - 1))
         self.isModernSettingsMenu = isModernSettings
@@ -803,6 +827,30 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         return CGRect(x: targetCenterX - 50.0, y: targetTopY, width: 100.0, height: 100.0)
     }
 
+    func showCoverFlowLoading(title: String) {
+        stopSmoothScrollDisplayLink()
+        headerTitleLabel.text = title
+        coverTracks = []
+        coverItems = []
+        hasLeadingRefresh = false
+        selectedIndex = 0
+        isCoverFlowActive = true
+
+        nowPlayingContainer.isHidden = true
+        tableView.isHidden = true
+        coverFlowContainer.isHidden = false
+        coverFlowContainer.transform = .identity
+        coverFlowContainer.alpha = 1.0
+
+        coverCollectionView.alpha = 0.0
+        coverCaptionStack.alpha = 0.0
+        coverCollectionView.reloadData()
+
+        coverLoadingStack.isHidden = false
+        coverLoadingStack.alpha = 1.0
+        coverLoadingSpinner.startAnimating()
+    }
+
     func showSongsCoverFlow(
         title: String,
         tracks: [IPodTrack],
@@ -811,14 +859,25 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         showStreamingRefresh: Bool = false
     ) {
         stopSmoothScrollDisplayLink()
-        refreshButton.isHidden = !showStreamingRefresh
         let wasNowPlaying = !nowPlayingContainer.isHidden
+        let wasLoading = !coverLoadingStack.isHidden
         let sourceArtworkFrame = artworkView.convert(artworkView.bounds, to: self)
         let sourceArtworkImage = artworkView.image
 
         headerTitleLabel.text = title
         self.coverTracks = tracks
-        self.selectedIndex = min(max(0, selectedIndex), max(0, tracks.count - 1))
+        self.hasLeadingRefresh = showStreamingRefresh
+        if showStreamingRefresh {
+            if tracks.isEmpty {
+                self.coverItems = [.refresh]
+            } else {
+                self.coverItems = [.refresh] + tracks.map { .track($0) } + [.refresh]
+            }
+        } else {
+            self.coverItems = tracks.map { .track($0) }
+        }
+
+        self.selectedIndex = min(max(0, selectedIndex), max(0, coverItems.count - 1))
         self.isCoverFlowActive = true
 
         nowPlayingContainer.isHidden = true
@@ -826,6 +885,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverFlowContainer.isHidden = false
         coverFlowContainer.transform = .identity
         coverFlowContainer.alpha = 1.0
+
+        coverLoadingSpinner.stopAnimating()
+        coverLoadingStack.isHidden = true
 
         setNeedsLayout()
         layoutIfNeeded()
@@ -838,14 +900,27 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverCollectionView.layoutIfNeeded()
         applyCoverFlowTransforms()
 
-        if !tracks.isEmpty {
+        if !coverItems.isEmpty {
             updateCoverFlowCaption(for: self.selectedIndex)
         } else {
             coverTitleLabel.text = "Tidak ada lagu"
             coverArtistLabel.text = "Sinkronkan lagu ke Music/Documents"
         }
 
-        if animateFromNowPlaying && wasNowPlaying && !tracks.isEmpty {
+        if wasLoading && !animateFromNowPlaying {
+            coverCollectionView.alpha = 0.0
+            coverCaptionStack.alpha = 0.0
+            UIView.animate(withDuration: 0.28, delay: 0, options: [.curveEaseOut]) {
+                self.coverCollectionView.alpha = 1.0
+                self.coverCaptionStack.alpha = 1.0
+            }
+            return
+        }
+
+        coverCollectionView.alpha = 1.0
+        coverCaptionStack.alpha = 1.0
+
+        if animateFromNowPlaying && wasNowPlaying && !coverItems.isEmpty {
             let exactTargetFrame = currentCoverFlowCenterFrame()
 
             let flyingCover = UIImageView(frame: sourceArtworkFrame)
@@ -876,6 +951,35 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                     self.applyCoverFlowTransforms()
                 }
             )
+        }
+    }
+
+    func updateCoverTrackArtwork(trackId: String, image: UIImage) {
+        guard isCoverFlowActive else { return }
+        if let tIdx = coverTracks.firstIndex(where: { $0.id == trackId }) {
+            let old = coverTracks[tIdx]
+            let updated = IPodTrack(
+                id: old.id,
+                title: old.title,
+                artist: old.artist,
+                album: old.album,
+                duration: old.duration,
+                assetURL: old.assetURL,
+                mediaItem: old.mediaItem,
+                artworkImage: image
+            )
+            coverTracks[tIdx] = updated
+            let itemIdx = tIdx + (hasLeadingRefresh ? 1 : 0)
+            if coverItems.indices.contains(itemIdx) {
+                coverItems[itemIdx] = .track(updated)
+                let ip = IndexPath(item: itemIdx, section: 0)
+                if let cell = coverCollectionView.cellForItem(at: ip) as? IPodCoverFlowCell {
+                    cell.configure(image: image)
+                }
+                if itemIdx == selectedIndex {
+                    onActiveCoverImageChanged?(image)
+                }
+            }
         }
     }
 
@@ -934,8 +1038,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         guard nowPlayingContainer.isHidden else { return }
 
         if isCoverFlowActive {
-            guard !coverTracks.isEmpty else { return }
-            let next = min(max(0, selectedIndex + delta), coverTracks.count - 1)
+            guard !coverItems.isEmpty else { return }
+            let next = min(max(0, selectedIndex + delta), coverItems.count - 1)
             if next != selectedIndex {
                 selectedIndex = next
                 let stepStride = coverItemWidth + coverItemSpacing
@@ -956,11 +1060,17 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     }
 
     private func updateCoverFlowCaption(for index: Int) {
-        guard coverTracks.indices.contains(index) else { return }
-        let track = coverTracks[index]
-        coverTitleLabel.text = track.title
-        coverArtistLabel.text = track.artist
-        onActiveCoverImageChanged?(track.artworkImage)
+        guard coverItems.indices.contains(index) else { return }
+        switch coverItems[index] {
+        case .track(let track):
+            coverTitleLabel.text = track.title
+            coverArtistLabel.text = track.artist
+            onActiveCoverImageChanged?(track.artworkImage)
+        case .refresh:
+            coverTitleLabel.text = "Refresh Lagu"
+            coverArtistLabel.text = "Muat ulang daftar lagu baru"
+            onActiveCoverImageChanged?(nil)
+        }
     }
 
     private func applyCoverFlowTransforms() {
@@ -1008,7 +1118,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         let sourceCoverFrame = wasCoverFlow ? currentCoverFlowCenterFrame() : .zero
 
         stopSmoothScrollDisplayLink()
-        refreshButton.isHidden = true
+        coverLoadingSpinner.stopAnimating()
+        coverLoadingStack.isHidden = true
         headerTitleLabel.text = "Now Playing"
         tableView.isHidden = true
         coverFlowContainer.isHidden = true
@@ -1137,15 +1248,80 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         return cell
     }
 
+    private func makeRefreshCoverImage() -> UIImage? {
+        let size = CGSize(width: 100, height: 100)
+        UIGraphicsBeginImageContextWithOptions(size, true, 0)
+        defer { UIGraphicsEndImageContext() }
+        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
+
+        let bgColors: [CGColor]
+        let glyphColor: UIColor
+        if theme == .darkPod {
+            bgColors = [
+                UIColor(red: 0.16, green: 0.17, blue: 0.21, alpha: 1.0).cgColor,
+                UIColor(red: 0.09, green: 0.10, blue: 0.13, alpha: 1.0).cgColor
+            ]
+            glyphColor = UIColor(white: 0.92, alpha: 1.0)
+        } else {
+            bgColors = [
+                theme.highlightTop.withAlphaComponent(0.22).cgColor,
+                theme.highlightBottom.withAlphaComponent(0.36).cgColor
+            ]
+            glyphColor = theme.primaryText
+        }
+
+        if let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: bgColors as CFArray, locations: [0.0, 1.0]) {
+            ctx.drawLinearGradient(grad, start: .zero, end: CGPoint(x: 0, y: size.height), options: [])
+        }
+
+        let center = CGPoint(x: size.width / 2.0, y: size.height / 2.0)
+        let radius: CGFloat = 20.0
+        let startAngle: CGFloat = -.pi * 0.25
+        let endAngle: CGFloat = .pi * 1.45
+
+        let arcPath = UIBezierPath(
+            arcCenter: center,
+            radius: radius,
+            startAngle: startAngle,
+            endAngle: endAngle,
+            clockwise: true
+        )
+        arcPath.lineWidth = 4.0
+        arcPath.lineCapStyle = .round
+        glyphColor.setStroke()
+        arcPath.stroke()
+
+        // Arrowhead pointing clockwise at endAngle (top-left/top of arc)
+        let tipX = center.x + radius * cos(endAngle)
+        let tipY = center.y + radius * sin(endAngle)
+        let tangentAngle = endAngle + .pi / 2.0
+        let headLen: CGFloat = 10.0
+        let wingAngle: CGFloat = .pi * 0.78
+
+        let arrowPath = UIBezierPath()
+        arrowPath.move(to: CGPoint(x: tipX + 3.0 * cos(tangentAngle), y: tipY + 3.0 * sin(tangentAngle)))
+        arrowPath.addLine(to: CGPoint(x: tipX + headLen * cos(tangentAngle + wingAngle), y: tipY + headLen * sin(tangentAngle + wingAngle)))
+        arrowPath.addLine(to: CGPoint(x: tipX + headLen * cos(tangentAngle - wingAngle), y: tipY + headLen * sin(tangentAngle - wingAngle)))
+        arrowPath.close()
+        glyphColor.setFill()
+        arrowPath.fill()
+
+        return UIGraphicsGetImageFromCurrentImageContext()
+    }
+
     // MARK: - UICollectionViewDataSource & Delegate (Cover Flow)
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-        return coverTracks.count
+        return coverItems.count
     }
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "CoverCell", for: indexPath) as! IPodCoverFlowCell
-        let track = coverTracks[indexPath.item]
-        cell.configure(image: track.artworkImage ?? makeDefaultNoteArtwork())
+        switch coverItems[indexPath.item] {
+        case .track(let track):
+            cell.configure(image: track.artworkImage ?? makeDefaultNoteArtwork())
+        case .refresh:
+            cell.configure(image: makeRefreshCoverImage())
+        }
         return cell
     }
 
@@ -1155,7 +1331,16 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         if indexPath.item == selectedIndex {
-            onCoverFlowTrackSelected?(indexPath.item)
+            guard coverItems.indices.contains(indexPath.item) else { return }
+            switch coverItems[indexPath.item] {
+            case .refresh:
+                onStreamingRefreshTapped?()
+            case .track:
+                let trackIdx = indexPath.item - (hasLeadingRefresh ? 1 : 0)
+                if coverTracks.indices.contains(trackIdx) {
+                    onCoverFlowTrackSelected?(trackIdx)
+                }
+            }
         } else {
             selectedIndex = indexPath.item
             let stepStride = coverItemWidth + coverItemSpacing
@@ -1177,7 +1362,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         let stepStride = coverItemWidth + coverItemSpacing
         let rawIndex = Int(round(coverCollectionView.contentOffset.x / stepStride))
-        let clamped = min(max(0, rawIndex), max(0, coverTracks.count - 1))
+        let clamped = min(max(0, rawIndex), max(0, coverItems.count - 1))
         if clamped != selectedIndex {
             selectedIndex = clamped
             updateCoverFlowCaption(for: selectedIndex)
@@ -1188,7 +1373,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         guard scrollView === coverCollectionView else { return }
         let stepStride = coverItemWidth + coverItemSpacing
         let rawIndex = Int(round(targetContentOffset.pointee.x / stepStride))
-        let clamped = min(max(0, rawIndex), max(0, coverTracks.count - 1))
+        let clamped = min(max(0, rawIndex), max(0, coverItems.count - 1))
         targetCoverOffsetX = CGFloat(clamped) * stepStride
         targetContentOffset.pointee.x = targetCoverOffsetX
     }

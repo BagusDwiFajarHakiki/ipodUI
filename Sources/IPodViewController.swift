@@ -92,6 +92,40 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             self?.refreshStreamingList()
         }
 
+        IPodStreamingLibrary.shared.onTrackArtworkLoaded = { [weak self] trackId, image in
+            guard let self = self else { return }
+            self.screenView.updateCoverTrackArtwork(trackId: trackId, image: image)
+            if let qIdx = self.currentQueue.firstIndex(where: { $0.id == trackId }) {
+                let old = self.currentQueue[qIdx]
+                let updated = IPodTrack(
+                    id: old.id,
+                    title: old.title,
+                    artist: old.artist,
+                    album: old.album,
+                    duration: old.duration,
+                    assetURL: old.assetURL,
+                    mediaItem: old.mediaItem,
+                    artworkImage: image
+                )
+                self.currentQueue[qIdx] = updated
+                if qIdx == self.currentTrackIndex {
+                    self.playingTrackArtwork = image
+                    self.updateAmbientGlow(from: image)
+                    if self.isNowPlayingActive {
+                        self.screenView.showNowPlaying(
+                            track: updated,
+                            index: self.currentTrackIndex,
+                            total: self.currentQueue.count,
+                            transitionDirection: 0,
+                            animateFromCoverFlow: false
+                        )
+                    }
+                    let elapsed = self.player.map { CMTimeGetSeconds($0.currentTime()) } ?? 0
+                    self.updateNowPlayingInfo(track: updated, elapsed: elapsed.isFinite ? elapsed : 0)
+                }
+            }
+        }
+
         renderTopMenu(restoreIndex: 0)
 
         IPodMusicLibrary.shared.requestAccessAndLoad { [weak self] in
@@ -314,34 +348,100 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
-    private func refreshStreamingList() {
+    private func loadStreamingCatalog(showLoading: Bool = true) {
+        if showLoading {
+            screenView.showCoverFlowLoading(title: "Streaming")
+        }
         IPodStreamingLibrary.shared.refreshTracks { [weak self] _ in
             guard let self = self else { return }
-            if let top = self.menuStack.last, case .streamingSongs = top.node {
-                self.menuStack[self.menuStack.count - 1] = (.streamingSongs(pageIndex: 0), 0)
+            guard let top = self.menuStack.last, case .streamingSongs = top.node, !self.isNowPlayingActive else {
+                return
             }
-            self.renderTopMenu(restoreIndex: 0)
+            let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: 0)
+            let initialIndex = pageData.tracks.isEmpty ? 0 : 1
+            self.menuStack[self.menuStack.count - 1] = (.streamingSongs(pageIndex: 0), initialIndex)
+            self.renderTopMenu(restoreIndex: initialIndex)
             self.view.setNeedsLayout()
             self.view.layoutIfNeeded()
         }
     }
 
-    private func triggerShuffleSongs() {
-        let streamingPool = IPodStreamingLibrary.shared.allStreamingTracks
-        let offlinePool = IPodMusicLibrary.shared.allTracks
-        let source = !streamingPool.isEmpty ? streamingPool : offlinePool
-        guard !source.isEmpty else { return }
+    private func refreshStreamingList() {
+        loadStreamingCatalog(showLoading: true)
+    }
 
-        var shuffled = source.shuffled()
+    private func triggerShuffleLocalSongs(tracks: [IPodTrack]) {
+        guard !tracks.isEmpty else { return }
+        var shuffled = tracks.shuffled()
         if currentQueue.indices.contains(currentTrackIndex), shuffled.count > 1 {
             let activeId = currentQueue[currentTrackIndex].id
             if let first = shuffled.first, first.id == activeId {
                 shuffled.swapAt(0, Int.random(in: 1..<shuffled.count))
             }
         }
-        let randomStartIdx = Int.random(in: 0..<shuffled.count)
+        isShuffleActive = false
+        startQueue(tracks: shuffled, at: 0, useRelatedOrder: false)
+    }
+
+    private func triggerShuffleStreamingSongs() {
+        let pool = IPodStreamingLibrary.shared.allStreamingTracks
+        guard !pool.isEmpty else { return }
+
+        var candidates = pool
+        if currentQueue.indices.contains(currentTrackIndex), candidates.count > 1 {
+            let activeId = currentQueue[currentTrackIndex].id
+            candidates.removeAll { $0.id == activeId }
+        }
+        guard let chosen = candidates.randomElement() ?? pool.randomElement() else { return }
+
+        let wasCoverFlow = screenView.isCoverFlowActive
         isShuffleActive = true
-        startQueue(tracks: shuffled, at: randomStartIdx, useRelatedOrder: false)
+        currentQueue = [chosen]
+        currentTrackIndex = 0
+        watchdogRecoveriesForCurrentTrack = 0
+
+        playTrack(at: 0, transitionDirection: 0)
+        openNowPlayingScreen(animateFromCoverFlow: wasCoverFlow)
+
+        appendRecommendations(for: chosen, replaceUpcoming: true)
+    }
+
+    private func appendRecommendations(for seedTrack: IPodTrack, replaceUpcoming: Bool) {
+        let seedId = seedTrack.id
+        IPodStreamingLibrary.shared.fetchRecommendations(for: seedTrack, limit: 20) { [weak self] recs in
+            guard let self = self, self.isShuffleActive else { return }
+            guard self.currentQueue.indices.contains(self.currentTrackIndex),
+                  self.currentQueue[self.currentTrackIndex].id == seedId else { return }
+
+            let fallbackRelated = IPodStreamingLibrary.shared.buildRelatedQueue(
+                startingWith: seedTrack,
+                in: IPodStreamingLibrary.shared.allStreamingTracks
+            ).dropFirst().prefix(10)
+
+            let chosenRecs = !recs.isEmpty ? recs : Array(fallbackRelated)
+            guard !chosenRecs.isEmpty else { return }
+
+            if replaceUpcoming {
+                let current = self.currentQueue[self.currentTrackIndex]
+                self.currentQueue = [current] + chosenRecs
+                self.currentTrackIndex = 0
+            } else {
+                let existingIds = Set(self.currentQueue.map { $0.id })
+                let fresh = chosenRecs.filter { !existingIds.contains($0.id) }
+                self.currentQueue.append(contentsOf: fresh)
+            }
+
+            if self.isNowPlayingActive && self.currentQueue.indices.contains(self.currentTrackIndex) {
+                let active = self.currentQueue[self.currentTrackIndex]
+                self.screenView.showNowPlaying(
+                    track: active,
+                    index: self.currentTrackIndex,
+                    total: self.currentQueue.count,
+                    transitionDirection: 0,
+                    animateFromCoverFlow: false
+                )
+            }
+        }
     }
 
     // MARK: - Menu Navigation Engine
@@ -430,6 +530,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         if case .streamingSongs(let pageIndex) = top.node {
+            if IPodStreamingLibrary.shared.isFetchingSongs {
+                screenView.showCoverFlowLoading(title: "Streaming")
+                return
+            }
             let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
             let header = pageData.totalPages > 1
                 ? "Streaming (\(pageData.currentPage + 1)/\(pageData.totalPages))"
@@ -466,6 +570,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             menuStack[menuStack.count - 1].selectedIndex = screenView.selectedIndex
         }
         menuStack.append((node, 0))
+        if case .streamingSongs = node {
+            loadStreamingCatalog(showLoading: true)
+            return
+        }
         renderTopMenu(restoreIndex: 0)
     }
 
@@ -535,25 +643,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             return
         }
 
-        if let top = menuStack.last, case .streamingSongs(let pageIndex) = top.node {
-            let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
-            let proposed = screenView.selectedIndex + steps
-            if pageData.totalPages > 1 {
-                if proposed >= pageData.tracks.count {
-                    let nextPage = (pageData.currentPage + 1) % pageData.totalPages
-                    menuStack[menuStack.count - 1] = (.streamingSongs(pageIndex: nextPage), 0)
-                    renderTopMenu(restoreIndex: 0)
-                    return
-                } else if proposed < 0 && pageData.currentPage > 0 {
-                    let prevPage = pageData.currentPage - 1
-                    let prevCount = IPodStreamingLibrary.shared.tracksPage(pageIndex: prevPage).tracks.count
-                    menuStack[menuStack.count - 1] = (.streamingSongs(pageIndex: prevPage), max(0, prevCount - 1))
-                    renderTopMenu(restoreIndex: max(0, prevCount - 1))
-                    return
-                }
-            }
-        }
-
         screenView.moveSelection(by: steps)
     }
 
@@ -565,6 +654,15 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                let matchedSongIdx = IPodMusicLibrary.shared.allTracks.firstIndex(where: { $0.id == currentQueue[currentTrackIndex].id }) {
                 activeIndex = matchedSongIdx
                 menuStack[menuStack.count - 1].selectedIndex = matchedSongIdx
+            } else if let top = menuStack.last, case .streamingSongs(let pageIndex) = top.node,
+                      currentQueue.indices.contains(currentTrackIndex) {
+                let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
+                if let matchedIdx = pageData.tracks.firstIndex(where: { $0.id == currentQueue[currentTrackIndex].id }) {
+                    activeIndex = matchedIdx + 1
+                    menuStack[menuStack.count - 1].selectedIndex = activeIndex
+                } else {
+                    activeIndex = menuStack.last?.selectedIndex ?? (pageData.tracks.isEmpty ? 0 : 1)
+                }
             } else {
                 activeIndex = menuStack.last?.selectedIndex ?? 0
             }
@@ -580,7 +678,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     func clickWheelDidPressSelect() {
         if isNowPlayingActive {
-            triggerShuffleSongs()
             return
         }
         guard let top = menuStack.last else { return }
@@ -608,9 +705,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             }
 
         case .streamingSongs(let pageIndex):
+            if screenView.isRefreshItemSelected {
+                refreshStreamingList()
+                return
+            }
             let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
-            if pageData.tracks.indices.contains(idx) {
-                let chosen = pageData.tracks[idx]
+            if let trackIdx = screenView.selectedCoverTrackIndex, pageData.tracks.indices.contains(trackIdx) {
+                let chosen = pageData.tracks[trackIdx]
                 startQueue(
                     tracks: IPodStreamingLibrary.shared.allStreamingTracks,
                     at: 0,
@@ -663,11 +764,34 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     func clickWheelDidPressPlayPause() {
-        if !isNowPlayingActive && (currentQueue.isEmpty || !isPlaying) {
-            triggerShuffleSongs()
+        if isPlaying {
+            togglePlayPause()
             return
         }
-        togglePlayPause()
+        if isNowPlayingActive {
+            togglePlayPause()
+            return
+        }
+
+        if let top = menuStack.last {
+            switch top.node {
+            case .allSongs:
+                triggerShuffleLocalSongs(tracks: IPodMusicLibrary.shared.allTracks)
+                return
+            case .playlistTracks(let group):
+                triggerShuffleLocalSongs(tracks: group.tracks)
+                return
+            case .streamingSongs:
+                triggerShuffleStreamingSongs()
+                return
+            default:
+                break
+            }
+        }
+
+        if player != nil {
+            togglePlayPause()
+        }
     }
 
     func clickWheelDidPressNext() {
@@ -692,7 +816,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         let wasCoverFlow = screenView.isCoverFlowActive
         if !menuStack.isEmpty {
-            menuStack[menuStack.count - 1].selectedIndex = index
+            if case .streamingSongs = menuStack[menuStack.count - 1].node {
+                menuStack[menuStack.count - 1].selectedIndex = screenView.selectedIndex
+            } else {
+                menuStack[menuStack.count - 1].selectedIndex = index
+            }
         }
 
         if !useRelatedOrder && currentQueue.indices.contains(currentTrackIndex),
@@ -992,7 +1120,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private func togglePlayPause() {
         guard let player = player, currentQueue.indices.contains(currentTrackIndex) else {
-            triggerShuffleSongs()
             return
         }
         if isPlaying {
@@ -1014,6 +1141,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         guard !currentQueue.isEmpty else { return }
         currentTrackIndex = (currentTrackIndex + 1) % currentQueue.count
         playTrack(at: currentTrackIndex, transitionDirection: 1)
+        if isShuffleActive && currentTrackIndex >= max(0, currentQueue.count - 2) {
+            let active = currentQueue[currentTrackIndex]
+            if active.id.hasPrefix("innertube_") {
+                appendRecommendations(for: active, replaceUpcoming: false)
+            }
+        }
     }
 
     private func playPreviousTrack() {

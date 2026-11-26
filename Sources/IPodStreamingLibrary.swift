@@ -19,6 +19,7 @@ private enum InnerTubeClient {
     case android
     case iosMusic
     case webRemix
+    case web
     case mweb
 
     var clientName: String {
@@ -27,6 +28,7 @@ private enum InnerTubeClient {
         case .android:  return "ANDROID"
         case .iosMusic: return "IOS_MUSIC"
         case .webRemix: return "WEB_REMIX"
+        case .web:      return "WEB"
         case .mweb:     return "MWEB"
         }
     }
@@ -37,6 +39,7 @@ private enum InnerTubeClient {
         case .android:  return "3"
         case .iosMusic: return "26"
         case .webRemix: return "67"
+        case .web:      return "1"
         case .mweb:     return "2"
         }
     }
@@ -47,6 +50,7 @@ private enum InnerTubeClient {
         case .android:  return "20.10.38"
         case .iosMusic: return "7.29.3"
         case .webRemix: return "1.20260707.12.00"
+        case .web:      return "2.20250312.04.00"
         case .mweb:     return "2.20260501.01.00"
         }
     }
@@ -59,7 +63,7 @@ private enum InnerTubeClient {
             return "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip"
         case .iosMusic:
             return "com.google.ios.youtubemusic/7.29.3 (iPhone; U; CPU iPhone OS 12_5_8 like Mac OS X; en_US)"
-        case .webRemix:
+        case .webRemix, .web:
             return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         case .mweb:
             return "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1.2 Mobile/15E148 Safari/604.1"
@@ -98,24 +102,35 @@ final class IPodStreamingLibrary {
     static let pageSize: Int = 50
 
     private(set) var allStreamingTracks: [IPodTrack] = []
+    private(set) var isFetchingSongs: Bool = false
+    var onTrackArtworkLoaded: ((String, UIImage) -> Void)?
+
     private var videoIdByTrackId: [String: String] = [:]
     private var thumbnailURLByTrackId: [String: String] = [:]
     private var resolvedStreamCache: [String: IPodResolvedStream] = [:]
     private var artworkCache: [String: UIImage] = [:]
     private var visitorData: String?
+    private var fetchGeneration: Int = 0
 
     private let songQueries = [
         "lagu indonesia populer official audio",
+        "lagu indo hits terbaru official audio",
+        "indonesian indie pop official audio",
         "pop hits song official audio",
         "indie music song official audio",
         "acoustic song official audio",
-        "electronic music song official audio"
+        "electronic music song official audio",
+        "rnb soul song official audio",
+        "alternative rock song official audio",
+        "jazz chill song official audio",
+        "lagu galau indonesia official audio",
+        "kpop hits official audio",
+        "city pop song official audio",
+        "folk acoustic song official audio"
     ]
     private var queryIndex: Int = 0
 
-    private init() {
-        fetchSongsFromInnerTube(reshuffle: false) { _ in }
-    }
+    private init() {}
 
     private func makeTrack(
         id: String,
@@ -140,6 +155,78 @@ final class IPodStreamingLibrary {
 
     func refreshTracks(completion: @escaping (Bool) -> Void) {
         fetchSongsFromInnerTube(reshuffle: true, completion: completion)
+    }
+
+    func fetchRecommendations(for track: IPodTrack, limit: Int = 20, completion: @escaping ([IPodTrack]) -> Void) {
+        guard let videoId = videoIdByTrackId[track.id], !videoId.isEmpty,
+              let endpoint = URL(string: "https://www.youtube.com/youtubei/v1/next?prettyPrint=false") else {
+            DispatchQueue.main.async { completion([]) }
+            return
+        }
+
+        let client = InnerTubeClient.web
+        let body: [String: Any] = [
+            "context": [
+                "client": client.clientContext(visitorData: visitorData)
+            ],
+            "videoId": videoId
+        ]
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10.0
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(client.clientId, forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(client.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self,
+                  let data = data,
+                  error == nil,
+                  let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                DispatchQueue.main.async { completion([]) }
+                return
+            }
+
+            let parsed = self.parseSongsFromSearchJSON(json)
+                .filter { $0.videoId != videoId }
+            let limited = Array(parsed.prefix(limit))
+
+            var recTracks: [IPodTrack] = []
+            var idMap: [String: String] = [:]
+            var thumbMap: [String: String] = [:]
+
+            for (idx, entry) in limited.enumerated() {
+                let trackId = "innertube_\(entry.videoId)_rec_\(idx)"
+                let placeholderArt = self.placeholderArtwork(seed: entry.videoId)
+                let watchURL = URL(string: "https://m.youtube.com/watch?v=\(entry.videoId)")
+                let recTrack = self.makeTrack(
+                    id: trackId,
+                    title: entry.title,
+                    artist: entry.artist,
+                    album: entry.album,
+                    duration: 210,
+                    assetURL: watchURL,
+                    artworkImage: placeholderArt
+                )
+                recTracks.append(recTrack)
+                idMap[trackId] = entry.videoId
+                if let tURL = entry.thumbnailURL {
+                    thumbMap[trackId] = tURL
+                }
+            }
+
+            DispatchQueue.main.async {
+                for (k, v) in idMap { self.videoIdByTrackId[k] = v }
+                for (k, v) in thumbMap { self.thumbnailURLByTrackId[k] = v }
+                self.loadLowResThumbnailsAsync(for: recTracks, updateMainCatalog: false)
+                completion(recTracks)
+            }
+        }.resume()
     }
 
     func invalidateCachedURL(for track: IPodTrack) {
@@ -243,21 +330,34 @@ final class IPodStreamingLibrary {
     }
 
     private func fetchSongsFromInnerTube(reshuffle: Bool, completion: @escaping (Bool) -> Void) {
-        let q = songQueries[queryIndex % songQueries.count]
-        queryIndex += 1
+        isFetchingSongs = true
+        fetchGeneration += 1
+        let activeGen = fetchGeneration
 
-        let clients: [InnerTubeClient] = [.webRemix, .mweb, .iosMusic]
-        searchInnerTube(query: q, clients: clients, index: 0) { [weak self] entries in
+        // Pick 5 distinct queries rotating through the pool so each entry/refresh gets a fresh 50-song mix
+        var selectedQueries: [String] = []
+        let batchCount = min(5, songQueries.count)
+        for offset in 0..<batchCount {
+            let idx = (queryIndex + offset) % songQueries.count
+            selectedQueries.append(songQueries[idx])
+        }
+        queryIndex = (queryIndex + 3) % songQueries.count
+        selectedQueries.shuffle()
+
+        collectSongsBatch(queries: selectedQueries, targetCount: Self.pageSize) { [weak self] entries in
             guard let self = self else {
                 DispatchQueue.main.async { completion(false) }
                 return
             }
 
+            let orderedEntries = (reshuffle ? entries.shuffled() : entries.shuffled())
+            let cappedEntries = Array(orderedEntries.prefix(Self.pageSize))
+
             var tracks: [IPodTrack] = []
             var idMap: [String: String] = [:]
             var thumbMap: [String: String] = [:]
 
-            for (idx, entry) in entries.enumerated() {
+            for (idx, entry) in cappedEntries.enumerated() {
                 let trackId = "innertube_\(entry.videoId)_\(idx)"
                 let placeholderArt = self.placeholderArtwork(seed: entry.videoId)
                 let watchURL = URL(string: "https://m.youtube.com/watch?v=\(entry.videoId)")
@@ -278,11 +378,70 @@ final class IPodStreamingLibrary {
             }
 
             DispatchQueue.main.async {
-                self.videoIdByTrackId = idMap
-                self.thumbnailURLByTrackId = thumbMap
-                self.allStreamingTracks = reshuffle ? tracks.shuffled() : tracks
-                self.loadLowResThumbnailsAsync(for: self.allStreamingTracks)
+                guard activeGen == self.fetchGeneration else {
+                    completion(!self.allStreamingTracks.isEmpty)
+                    return
+                }
+                self.isFetchingSongs = false
+                for (k, v) in idMap { self.videoIdByTrackId[k] = v }
+                for (k, v) in thumbMap { self.thumbnailURLByTrackId[k] = v }
+                self.allStreamingTracks = tracks
+                self.loadLowResThumbnailsAsync(for: self.allStreamingTracks, updateMainCatalog: true)
                 completion(!tracks.isEmpty)
+            }
+        }
+    }
+
+    private func collectSongsBatch(
+        queries: [String],
+        targetCount: Int,
+        completion: @escaping ([InnerTubeSongEntry]) -> Void
+    ) {
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var merged: [InnerTubeSongEntry] = []
+        var seenVideoIds = Set<String>()
+
+        for q in queries {
+            group.enter()
+            let clients: [InnerTubeClient] = [.webRemix, .mweb, .iosMusic]
+            searchInnerTube(query: q, clients: clients, index: 0) { entries in
+                lock.lock()
+                for entry in entries where !seenVideoIds.contains(entry.videoId) {
+                    seenVideoIds.insert(entry.videoId)
+                    merged.append(entry)
+                }
+                lock.unlock()
+                group.leave()
+            }
+        }
+
+        group.notify(queue: .global(qos: .userInitiated)) {
+            if merged.count >= targetCount {
+                completion(merged)
+                return
+            }
+            // Top-up wave if initial 5 queries returned fewer than 50 after filtering
+            let extraQueries = self.songQueries.filter { !queries.contains($0) }.shuffled().prefix(3)
+            if extraQueries.isEmpty {
+                completion(merged)
+                return
+            }
+            let topUpGroup = DispatchGroup()
+            for q in extraQueries {
+                topUpGroup.enter()
+                self.searchInnerTube(query: q, clients: [.webRemix, .mweb], index: 0) { entries in
+                    lock.lock()
+                    for entry in entries where !seenVideoIds.contains(entry.videoId) {
+                        seenVideoIds.insert(entry.videoId)
+                        merged.append(entry)
+                    }
+                    lock.unlock()
+                    topUpGroup.leave()
+                }
+            }
+            topUpGroup.notify(queue: .global(qos: .userInitiated)) {
+                completion(merged)
             }
         }
     }
@@ -707,20 +866,26 @@ final class IPodStreamingLibrary {
         )
     }
 
-    private func loadLowResThumbnailsAsync(for tracks: [IPodTrack]) {
+    private func loadLowResThumbnailsAsync(for tracks: [IPodTrack], updateMainCatalog: Bool) {
         for (idx, track) in tracks.enumerated() {
             guard let thumbStr = thumbnailURLByTrackId[track.id],
                   let url = URL(string: thumbStr) else { continue }
             if let cached = artworkCache[thumbStr] {
-                replaceTrackArtwork(at: idx, expectedId: track.id, image: cached)
+                if updateMainCatalog {
+                    replaceTrackArtwork(at: idx, expectedId: track.id, image: cached)
+                }
+                onTrackArtworkLoaded?(track.id, cached)
                 continue
             }
             URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
                 guard let self = self, let data = data, let rawImg = UIImage(data: data) else { return }
                 let lowRes = self.downsampleImage(rawImg, targetSide: 96)
-                self.artworkCache[thumbStr] = lowRes
                 DispatchQueue.main.async {
-                    self.replaceTrackArtwork(at: idx, expectedId: track.id, image: lowRes)
+                    self.artworkCache[thumbStr] = lowRes
+                    if updateMainCatalog {
+                        self.replaceTrackArtwork(at: idx, expectedId: track.id, image: lowRes)
+                    }
+                    self.onTrackArtworkLoaded?(track.id, lowRes)
                 }
             }.resume()
         }
