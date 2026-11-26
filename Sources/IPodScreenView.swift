@@ -57,68 +57,144 @@ enum IPodColorTheme: CaseIterable {
 struct IPodMenuRow {
     let title: String
     let hasSubmenu: Bool
+    let valueBadge: String?
+    let isPositiveToggle: Bool?
+
+    init(title: String, hasSubmenu: Bool, valueBadge: String? = nil, isPositiveToggle: Bool? = nil) {
+        self.title = title
+        self.hasSubmenu = hasSubmenu
+        self.valueBadge = valueBadge
+        self.isPositiveToggle = isPositiveToggle
+    }
 }
 
 class IPodMenuCell: UITableViewCell {
+    private let cardBackground = UIView()
+    private let highlightGradient = CAGradientLayer()
     let titleLabel = UILabel()
     let arrowLabel = UILabel()
-    private let highlightGradient = CAGradientLayer()
+    private let badgeContainer = UIView()
+    private let badgeLabel = UILabel()
+    private var badgeWidthConstraint: NSLayoutConstraint!
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
         selectionStyle = .none
         backgroundColor = .clear
 
-        highlightGradient.isHidden = true
-        highlightGradient.cornerRadius = 4
-        contentView.layer.insertSublayer(highlightGradient, at: 0)
+        cardBackground.layer.cornerRadius = 7
+        cardBackground.clipsToBounds = true
+        cardBackground.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(cardBackground)
 
-        titleLabel.font = UIFont.systemFont(ofSize: 15, weight: .semibold)
+        highlightGradient.isHidden = true
+        highlightGradient.cornerRadius = 7
+        cardBackground.layer.insertSublayer(highlightGradient, at: 0)
+
+        titleLabel.font = UIFont.systemFont(ofSize: 14.5, weight: .semibold)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(titleLabel)
+        cardBackground.addSubview(titleLabel)
 
         arrowLabel.text = "›"
         arrowLabel.font = UIFont.systemFont(ofSize: 18, weight: .bold)
         arrowLabel.textAlignment = .right
         arrowLabel.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(arrowLabel)
+        cardBackground.addSubview(arrowLabel)
+
+        badgeContainer.layer.cornerRadius = 9
+        badgeContainer.isHidden = true
+        badgeContainer.translatesAutoresizingMaskIntoConstraints = false
+        cardBackground.addSubview(badgeContainer)
+
+        badgeLabel.font = UIFont.systemFont(ofSize: 11, weight: .bold)
+        badgeLabel.textAlignment = .center
+        badgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        badgeContainer.addSubview(badgeLabel)
+
+        badgeWidthConstraint = badgeContainer.widthAnchor.constraint(greaterThanOrEqualToConstant: 44)
 
         NSLayoutConstraint.activate([
-            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
-            titleLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            titleLabel.trailingAnchor.constraint(equalTo: arrowLabel.leadingAnchor, constant: -6),
+            cardBackground.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 2),
+            cardBackground.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -2),
+            cardBackground.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 8),
+            cardBackground.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
 
-            arrowLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
-            arrowLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            arrowLabel.widthAnchor.constraint(equalToConstant: 16)
+            titleLabel.leadingAnchor.constraint(equalTo: cardBackground.leadingAnchor, constant: 10),
+            titleLabel.centerYAnchor.constraint(equalTo: cardBackground.centerYAnchor),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: badgeContainer.leadingAnchor, constant: -8),
+
+            arrowLabel.trailingAnchor.constraint(equalTo: cardBackground.trailingAnchor, constant: -10),
+            arrowLabel.centerYAnchor.constraint(equalTo: cardBackground.centerYAnchor),
+            arrowLabel.widthAnchor.constraint(equalToConstant: 14),
+
+            badgeContainer.trailingAnchor.constraint(equalTo: cardBackground.trailingAnchor, constant: -8),
+            badgeContainer.centerYAnchor.constraint(equalTo: cardBackground.centerYAnchor),
+            badgeContainer.heightAnchor.constraint(equalToConstant: 20),
+            badgeWidthConstraint,
+
+            badgeLabel.leadingAnchor.constraint(equalTo: badgeContainer.leadingAnchor, constant: 8),
+            badgeLabel.trailingAnchor.constraint(equalTo: badgeContainer.trailingAnchor, constant: -8),
+            badgeLabel.centerYAnchor.constraint(equalTo: badgeContainer.centerYAnchor)
         ])
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        highlightGradient.frame = contentView.bounds.insetBy(dx: 6, dy: 1)
+        highlightGradient.frame = cardBackground.bounds
     }
 
-    func configure(row: IPodMenuRow, isSelected: Bool, theme: IPodColorTheme) {
+    func configure(row: IPodMenuRow, isSelected: Bool, isModernSettings: Bool, theme: IPodColorTheme) {
         titleLabel.text = row.title
-        arrowLabel.isHidden = !row.hasSubmenu
         highlightGradient.colors = [theme.highlightTop.cgColor, theme.highlightBottom.cgColor]
+
+        let hasBadge = (row.valueBadge != nil)
+        badgeContainer.isHidden = !hasBadge
+        badgeLabel.text = row.valueBadge
+        arrowLabel.isHidden = !row.hasSubmenu || hasBadge
+
+        if isModernSettings {
+            cardBackground.backgroundColor = theme == .darkPod
+                ? UIColor(white: 1.0, alpha: 0.06)
+                : UIColor(white: 0.0, alpha: 0.045)
+        } else {
+            cardBackground.backgroundColor = .clear
+        }
 
         if isSelected {
             highlightGradient.isHidden = false
             titleLabel.textColor = .white
             arrowLabel.textColor = .white
+            if let isOn = row.isPositiveToggle {
+                badgeContainer.backgroundColor = isOn
+                    ? UIColor(red: 0.20, green: 0.78, blue: 0.42, alpha: 1.0)
+                    : UIColor(white: 0.0, alpha: 0.30)
+                badgeLabel.textColor = .white
+            } else {
+                badgeContainer.backgroundColor = UIColor(white: 1.0, alpha: 0.22)
+                badgeLabel.textColor = .white
+            }
         } else {
             highlightGradient.isHidden = true
             titleLabel.textColor = theme.primaryText
             arrowLabel.textColor = theme.secondaryText
+            if let isOn = row.isPositiveToggle {
+                badgeContainer.backgroundColor = isOn
+                    ? UIColor(red: 0.18, green: 0.72, blue: 0.38, alpha: 0.90)
+                    : (theme == .darkPod ? UIColor(white: 1.0, alpha: 0.12) : UIColor(white: 0.0, alpha: 0.10))
+                badgeLabel.textColor = isOn ? .white : theme.secondaryText
+            } else {
+                badgeContainer.backgroundColor = theme == .darkPod
+                    ? UIColor(white: 1.0, alpha: 0.12)
+                    : UIColor(white: 0.0, alpha: 0.08)
+                badgeLabel.textColor = theme.primaryText
+            }
         }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 }
 
-// MARK: - Cover Flow Cell (Tanpa Garis Pinggir pada Sampul)
+// MARK: - Cover Flow Cell
 class IPodCoverFlowCell: UICollectionViewCell {
     let coverImageView = UIImageView()
     let reflectionImageView = UIImageView()
@@ -201,6 +277,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let tableView = UITableView()
     private var rows: [IPodMenuRow] = []
     private(set) var selectedIndex: Int = 0
+    private var isModernSettingsMenu = false
 
     // Horizontal Cover Flow View
     private let coverFlowContainer = UIView()
@@ -290,7 +367,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         tableView.dataSource = self
         tableView.delegate = self
         tableView.register(IPodMenuCell.self, forCellReuseIdentifier: "IPodCell")
-        tableView.rowHeight = 32
+        tableView.rowHeight = 36
         tableView.separatorStyle = .none
         tableView.backgroundColor = .clear
         tableView.isUserInteractionEnabled = false
@@ -342,7 +419,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         nowPlayingContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(nowPlayingContainer)
 
-        // Sampul di Now Playing tanpa garis pinggir
         artworkView.contentMode = .scaleAspectFill
         artworkView.clipsToBounds = true
         artworkView.layer.borderWidth = 0
@@ -459,7 +535,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             playStateIcon.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
             playStateIcon.leadingAnchor.constraint(greaterThanOrEqualTo: clockLabel.trailingAnchor, constant: 4),
 
-            tableView.topAnchor.constraint(equalTo: headerBar.bottomAnchor, constant: 2),
+            tableView.topAnchor.constraint(equalTo: headerBar.bottomAnchor, constant: 4),
             tableView.leadingAnchor.constraint(equalTo: leadingAnchor),
             tableView.trailingAnchor.constraint(equalTo: trailingAnchor),
             tableView.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -618,12 +694,14 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         playStateIcon.text = isPlaying ? "▶" : "❚❚"
     }
 
-    func showMenu(title: String, items: [IPodMenuRow], selectedIndex: Int = 0) {
+    func showMenu(title: String, items: [IPodMenuRow], selectedIndex: Int = 0, isModernSettings: Bool = false) {
         stopSmoothScrollDisplayLink()
         headerTitleLabel.text = title
         self.rows = items
         self.selectedIndex = min(max(0, selectedIndex), max(0, items.count - 1))
+        self.isModernSettingsMenu = isModernSettings
         self.isCoverFlowActive = false
+        tableView.rowHeight = isModernSettings ? 40 : 34
         nowPlayingContainer.isHidden = true
         coverFlowContainer.isHidden = true
         tableView.isHidden = false
@@ -965,7 +1043,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "IPodCell", for: indexPath) as! IPodMenuCell
-        cell.configure(row: rows[indexPath.row], isSelected: indexPath.row == selectedIndex, theme: theme)
+        cell.configure(row: rows[indexPath.row], isSelected: indexPath.row == selectedIndex, isModernSettings: isModernSettingsMenu, theme: theme)
         return cell
     }
 

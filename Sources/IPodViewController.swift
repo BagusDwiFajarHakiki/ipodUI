@@ -22,6 +22,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var isNowPlayingActive = false
     private var isPlaylistsMenuEnabled: Bool = true
     private var currentGlowColor = UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
+    private var playingTrackArtwork: UIImage?
 
     private var player: AVPlayer?
     private var playbackTimer: Timer?
@@ -74,11 +75,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func setupBodyAndLayout() {
         view.layer.insertSublayer(bodyGradient, at: 0)
 
+        // Cahaya penuh di sekeliling LCD (atas, kiri, kanan, bawah)
         surroundGlowImageView.image = makeSoftRadialGlowImage(size: CGSize(width: 240, height: 220))
         surroundGlowImageView.contentMode = .scaleToFill
         surroundGlowImageView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(surroundGlowImageView)
 
+        // Cahaya tambahan memanjang sampai batas bawah Click Wheel
         bottomGlowImageView.image = makeSoftRadialGlowImage(size: CGSize(width: 260, height: 320))
         bottomGlowImageView.contentMode = .scaleToFill
         bottomGlowImageView.translatesAutoresizingMaskIntoConstraints = false
@@ -96,20 +99,22 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
-            surroundGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -24),
-            surroundGlowImageView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor, constant: 28),
-            surroundGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -16),
-            surroundGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 16),
-
-            bottomGlowImageView.topAnchor.constraint(equalTo: screenView.bottomAnchor, constant: -36),
-            bottomGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: 24),
-            bottomGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -24),
-            bottomGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 24),
+            // Pendaran di sekeliling LCD (atas, kiri, kanan, bawah)
+            surroundGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -26),
+            surroundGlowImageView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor, constant: 30),
+            surroundGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -18),
+            surroundGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 18),
 
             clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -42),
             clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.70),
-            clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor)
+            clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor),
+
+            // Cahaya bawah memanjang tepat sampai batas bawah Click Wheel
+            bottomGlowImageView.topAnchor.constraint(equalTo: screenView.bottomAnchor, constant: -24),
+            bottomGlowImageView.bottomAnchor.constraint(equalTo: clickWheel.bottomAnchor, constant: 10),
+            bottomGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -22),
+            bottomGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 22)
         ])
     }
 
@@ -121,11 +126,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         let maxRadius = max(size.width, size.height) / 2.0
         let colors = [
             UIColor.white.withAlphaComponent(1.0).cgColor,
-            UIColor.white.withAlphaComponent(0.55).cgColor,
-            UIColor.white.withAlphaComponent(0.18).cgColor,
+            UIColor.white.withAlphaComponent(0.58).cgColor,
+            UIColor.white.withAlphaComponent(0.20).cgColor,
             UIColor.white.withAlphaComponent(0.0).cgColor
         ] as CFArray
-        let locations: [CGFloat] = [0.0, 0.38, 0.72, 1.0]
+        let locations: [CGFloat] = [0.0, 0.40, 0.74, 1.0]
 
         if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: locations) {
             ctx.saveGState()
@@ -176,8 +181,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         let isDark = (screenView.theme == .darkPod)
         surroundGlowImageView.tintColor = color
         bottomGlowImageView.tintColor = color
-        surroundGlowImageView.alpha = isDark ? 0.48 : 0.28
-        bottomGlowImageView.alpha = isDark ? 0.44 : 0.24
+        surroundGlowImageView.alpha = isDark ? 0.56 : 0.30
+        bottomGlowImageView.alpha = isDark ? 0.46 : 0.24
     }
 
     private func updateAmbientGlow(from image: UIImage?) {
@@ -273,7 +278,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         case .playlists:
             var items = [IPodMenuRow(title: "+ New Playlist...", hasSubmenu: false)]
             let pls = IPodMusicLibrary.shared.playlists
-            items.append(contentsOf: pls.map { IPodMenuRow(title: "\($0.name) (\($0.tracks.count))", hasSubmenu: true) })
+            items.append(contentsOf: pls.map { IPodMenuRow(title: $0.name, hasSubmenu: true, valueBadge: "\($0.tracks.count)") })
             return ("Playlists", items)
 
         case .playlistTracks(let group):
@@ -290,14 +295,28 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             return ("Songs", songs.map { IPodMenuRow(title: $0.title, hasSubmenu: false) })
 
         case .settings:
-            let themeLabel = "Theme: \(screenView.theme.displayName)"
-            let playlistToggleLabel = "Playlists Menu: \(isPlaylistsMenuEnabled ? "ON" : "OFF")"
-            let appIconLabel = "App Icon: \(isLightAppIconActive ? "Light" : "Dark")"
             return ("Settings", [
-                IPodMenuRow(title: themeLabel, hasSubmenu: false),
-                IPodMenuRow(title: playlistToggleLabel, hasSubmenu: false),
-                IPodMenuRow(title: appIconLabel, hasSubmenu: false),
-                IPodMenuRow(title: "Reload Music Library", hasSubmenu: false)
+                IPodMenuRow(
+                    title: "Appearance",
+                    hasSubmenu: false,
+                    valueBadge: screenView.theme.displayName
+                ),
+                IPodMenuRow(
+                    title: "Playlists Menu",
+                    hasSubmenu: false,
+                    valueBadge: isPlaylistsMenuEnabled ? "ON" : "OFF",
+                    isPositiveToggle: isPlaylistsMenuEnabled
+                ),
+                IPodMenuRow(
+                    title: "App Icon",
+                    hasSubmenu: false,
+                    valueBadge: isLightAppIconActive ? "Light" : "Dark"
+                ),
+                IPodMenuRow(
+                    title: "Music Library",
+                    hasSubmenu: false,
+                    valueBadge: "Reload"
+                )
             ])
         }
     }
@@ -317,8 +336,21 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             return
         }
 
+        // Saat berada di menu utama (bukan Cover Flow Songs), gunakan warna dari lagu yang sedang diputar
+        updateAmbientGlow(from: playingTrackArtwork)
+
+        let isSettings = {
+            if case .settings = top.node { return true }
+            return false
+        }()
+
         let content = rows(for: top.node)
-        screenView.showMenu(title: content.title, items: content.items, selectedIndex: restoreIndex)
+        screenView.showMenu(
+            title: content.title,
+            items: content.items,
+            selectedIndex: restoreIndex,
+            isModernSettings: isSettings
+        )
     }
 
     private func pushMenu(_ node: IPodMenuNode) {
@@ -557,6 +589,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         player = AVPlayer(playerItem: item)
         player?.play()
         isPlaying = true
+        playingTrackArtwork = track.artworkImage
         screenView.updatePlayState(isPlaying: true)
         updateAmbientGlow(from: track.artworkImage)
 
