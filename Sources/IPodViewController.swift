@@ -1,584 +1,883 @@
-import Foundation
 import UIKit
+import AVFoundation
 import MediaPlayer
 
-private enum MetroLiteStreamClient {
-    case iosMusic
-    case webRemix
-    case tvEmbedded
-
-    var clientName: String {
-        switch self {
-        case .iosMusic:   return "IOS_MUSIC"
-        case .webRemix:   return "WEB_REMIX"
-        case .tvEmbedded: return "TVHTML5_SIMPLY_EMBEDDED_PLAYER"
-        }
-    }
-
-    var clientVersion: String {
-        switch self {
-        case .iosMusic:   return "6.42.1"
-        case .webRemix:   return "1.20250101.01.00"
-        case .tvEmbedded: return "2.0"
-        }
-    }
-
-    var userAgent: String {
-        switch self {
-        case .iosMusic:
-            return "com.google.ios.youtubemusic/6.42.1 (iPhone; U; CPU iPhone OS 12_5_8 like Mac OS X; en_US)"
-        case .webRemix:
-            return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        case .tvEmbedded:
-            return "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/537.36 (KHTML, like Gecko) TV Safari/537.36"
-        }
-    }
+enum IPodMenuNode {
+    case root
+    case music
+    case playlists
+    case playlistTracks(IPodPlaylistGroup)
+    case allSongs
+    case streamingSongs(pageIndex: Int)
+    case settings
 }
 
-final class IPodStreamingLibrary {
-    static let shared = IPodStreamingLibrary()
-    static let pageSize: Int = 50
+class IPodViewController: UIViewController, ClickWheelDelegate {
+    private let bodyGradient = CAGradientLayer()
+    private let ambientGlowImageView = UIImageView()
+    private let screenView = IPodScreenView()
+    private let clickWheel = ClickWheelView()
 
-    private(set) var allStreamingTracks: [IPodTrack] = []
-    private var videoIdByTrackId: [String: String] = [:]
-    private var resolvedAudioURLCache: [String: URL] = [:]
-    private var artworkCache: [String: UIImage] = [:]
+    private var menuStack: [(node: IPodMenuNode, selectedIndex: Int)] = [(.root, 0)]
+    private var isNowPlayingActive = false
+    private var isPlaylistsMenuEnabled: Bool = true
+    private var currentGlowColor = UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
+    private var playingTrackArtwork: UIImage?
+    private var lastGlowSize: CGSize = .zero
 
-    private let songQueries = [
-        "official audio song",
-        "indie song acoustic",
-        "synthwave song track",
-        "city pop song",
-        "jazz instrumental song"
-    ]
-    private var queryCursor: Int = 0
+    private var player: AVPlayer?
+    private var playbackTimer: Timer?
+    private var endObserver: Any?
+    private var currentQueue: [IPodTrack] = []
+    private var currentTrackIndex: Int = 0
+    private var isPlaying = false
+    private var isShuffleActive = false
 
-    private let verifiedAudioStreams: [String] = [
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-10.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-11.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-12.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-13.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-14.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-15.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-16.mp3"
-    ]
-
-    private init() {
-        loadSongsCatalog(reshuffle: false)
-        fetchSongsFromInnerTube(reshuffle: false) { _ in }
+    override var prefersStatusBarHidden: Bool {
+        return true
     }
 
-    private func makeTrack(
-        id: String,
-        title: String,
-        artist: String,
-        album: String,
-        duration: TimeInterval,
-        assetURL: URL?,
-        artworkImage: UIImage?
-    ) -> IPodTrack {
-        return IPodTrack(
-            id: id,
-            title: title,
-            artist: artist,
-            album: album,
-            duration: duration,
-            assetURL: assetURL,
-            mediaItem: nil,
-            artworkImage: artworkImage
-        )
-    }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        isPlaylistsMenuEnabled = UserDefaults.standard.object(forKey: "ipod_playlists_enabled") as? Bool ?? true
+        setupBodyAndLayout()
+        applyThemeToBodyAndWheel()
+        setupAudioSession()
+        setupRemoteCommands()
 
-    func refreshTracks(completion: @escaping (Bool) -> Void) {
-        fetchSongsFromInnerTube(reshuffle: true) { [weak self] success in
-            if !success {
-                self?.loadSongsCatalog(reshuffle: true)
-            }
-            completion(true)
-        }
-    }
+        clickWheel.delegate = self
 
-    func tracksPage(pageIndex: Int) -> (tracks: [IPodTrack], currentPage: Int, totalPages: Int, hasNextPage: Bool) {
-        let total = allStreamingTracks.count
-        guard total > 0 else {
-            return ([], 0, 1, false)
-        }
-        let totalPages = max(1, Int(ceil(Double(total) / Double(Self.pageSize))))
-        let safePage = min(max(0, pageIndex), totalPages - 1)
-        let start = safePage * Self.pageSize
-        let end = min(start + Self.pageSize, total)
-        let slice = Array(allStreamingTracks[start..<end])
-        return (slice, safePage, totalPages, safePage + 1 < totalPages)
-    }
-
-    func buildRelatedQueue(startingWith selectedTrack: IPodTrack, in pool: [IPodTrack]) -> [IPodTrack] {
-        let source = pool.isEmpty ? allStreamingTracks : pool
-        guard !source.isEmpty else { return [selectedTrack] }
-
-        let others = source.filter { $0.id != selectedTrack.id }
-        let selectedWords = Set(
-            (selectedTrack.title + " " + selectedTrack.artist + " " + selectedTrack.album)
-                .lowercased()
-                .components(separatedBy: CharacterSet.alphanumerics.inverted)
-                .filter { $0.count >= 3 }
-        )
-
-        let scored = others.map { candidate -> (track: IPodTrack, score: Int, jitter: Int) in
-            var score = 0
-            if candidate.artist.caseInsensitiveCompare(selectedTrack.artist) == .orderedSame {
-                score += 10
-            }
-            if candidate.album.caseInsensitiveCompare(selectedTrack.album) == .orderedSame {
-                score += 6
-            }
-            let candWords = Set(
-                (candidate.title + " " + candidate.artist + " " + candidate.album)
-                    .lowercased()
-                    .components(separatedBy: CharacterSet.alphanumerics.inverted)
-                    .filter { $0.count >= 3 }
-            )
-            let overlapCount = selectedWords.intersection(candWords).count
-            score += overlapCount * 3
-            return (candidate, score, Int.random(in: 0...4))
-        }
-
-        let sortedRelated = scored.sorted {
-            if $0.score != $1.score { return $0.score > $1.score }
-            return $0.jitter < $1.jitter
-        }.map { $0.track }
-
-        return [selectedTrack] + sortedRelated
-    }
-
-    func resolvePlayableAudioURL(for track: IPodTrack, completion: @escaping (URL?) -> Void) {
-        if let cached = resolvedAudioURLCache[track.id] {
-            completion(cached)
-            return
-        }
-
-        let fallbackStreamURL = track.assetURL ?? URL(string: verifiedAudioStreams[abs(track.id.hashValue) % verifiedAudioStreams.count])
-
-        guard let videoId = videoIdByTrackId[track.id], !videoId.isEmpty else {
-            if let fURL = fallbackStreamURL {
-                resolvedAudioURLCache[track.id] = fURL
-            }
-            completion(fallbackStreamURL)
-            return
-        }
-
-        let clients: [MetroLiteStreamClient] = [.iosMusic, .webRemix, .tvEmbedded]
-        resolveStreamViaClients(videoId: videoId, clients: clients, index: 0) { [weak self] resolvedURL in
-            guard let self = self else {
-                completion(fallbackStreamURL)
-                return
-            }
-            if let url = resolvedURL {
-                self.resolvedAudioURLCache[track.id] = url
-                DispatchQueue.main.async { completion(url) }
-                return
-            }
-
-            if let fURL = fallbackStreamURL {
-                self.resolvedAudioURLCache[track.id] = fURL
-            }
-            DispatchQueue.main.async {
-                completion(fallbackStreamURL)
-            }
-        }
-    }
-
-    private func fetchSongsFromInnerTube(reshuffle: Bool, completion: @escaping (Bool) -> Void) {
-        let query = songQueries[queryCursor % songQueries.count]
-        queryCursor += 1
-
-        let searchClients: [MetroLiteStreamClient] = [.webRemix, .iosMusic]
-        searchInnerTubeSongsOnly(query: query, clients: searchClients, index: 0) { [weak self] items in
-            guard let self = self, !items.isEmpty else {
-                DispatchQueue.main.async { completion(false) }
-                return
-            }
-
-            var collected: [IPodTrack] = []
-            var idMap: [String: String] = [:]
-
-            for (idx, item) in items.prefix(100).enumerated() {
-                let trackId = "song_online_\(idx)_\(item.videoId)"
-                let art = self.makeLowResArtwork(title: item.title, artist: item.artist, tag: "Song")
-                let streamURL = URL(string: self.verifiedAudioStreams[idx % self.verifiedAudioStreams.count])
-                let track = self.makeTrack(
-                    id: trackId,
-                    title: item.title,
-                    artist: item.artist,
-                    album: item.album,
-                    duration: item.duration,
-                    assetURL: streamURL,
-                    artworkImage: art
-                )
-                collected.append(track)
-                idMap[trackId] = item.videoId
-            }
-
-            DispatchQueue.main.async {
-                self.videoIdByTrackId = idMap
-                self.allStreamingTracks = reshuffle ? collected.shuffled() : collected
-                completion(!collected.isEmpty)
-            }
-        }
-    }
-
-    private struct ParsedSongItem {
-        let videoId: String
-        let title: String
-        let artist: String
-        let album: String
-        let duration: TimeInterval
-    }
-
-    private func searchInnerTubeSongsOnly(
-        query: String,
-        clients: [MetroLiteStreamClient],
-        index: Int,
-        completion: @escaping ([ParsedSongItem]) -> Void
-    ) {
-        guard clients.indices.contains(index) else {
-            completion([])
-            return
-        }
-        let client = clients[index]
-        guard let endpoint = URL(string: "https://www.youtube.com/youtubei/v1/search?prettyPrint=false") else {
-            completion([])
-            return
-        }
-
-        let payload: [String: Any] = [
-            "context": [
-                "client": [
-                    "clientName": client.clientName,
-                    "clientVersion": client.clientVersion,
-                    "hl": "en",
-                    "gl": "US"
-                ]
-            ],
-            "query": query
-        ]
-
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 8.0
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        screenView.onCoverFlowTrackSelected = { [weak self] index in
             guard let self = self else { return }
-            guard let data = data,
-                  error == nil,
-                  let http = response as? HTTPURLResponse,
-                  http.statusCode == 200,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                self.searchInnerTubeSongsOnly(query: query, clients: clients, index: index + 1, completion: completion)
+            if let top = self.menuStack.last, case .streamingSongs(let pageIndex) = top.node {
+                let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
+                if pageData.tracks.indices.contains(index) {
+                    let chosen = pageData.tracks[index]
+                    self.startQueue(
+                        tracks: IPodStreamingLibrary.shared.allStreamingTracks,
+                        at: 0,
+                        selectedTrack: chosen,
+                        useRelatedOrder: true
+                    )
+                }
                 return
             }
 
-            let songs = self.extractOnlySongsFromSearchJSON(json)
-            if !songs.isEmpty {
-                completion(songs)
-            } else {
-                self.searchInnerTubeSongsOnly(query: query, clients: clients, index: index + 1, completion: completion)
+            let songs = IPodMusicLibrary.shared.allTracks
+            if songs.indices.contains(index) {
+                self.startQueue(tracks: songs, at: index, useRelatedOrder: false)
             }
-        }.resume()
-    }
-
-    private func extractOnlySongsFromSearchJSON(_ root: Any) -> [ParsedSongItem] {
-        var results: [ParsedSongItem] = []
-        var seenIds = Set<String>()
-
-        let bannedKeywords = ["playlist", "mix", "compilation", "full album", "hour", "24/7", "radio", "live set"]
-
-        func isSongTitleAllowed(_ title: String) -> Bool {
-            let lower = title.lowercased()
-            return !bannedKeywords.contains { lower.contains($0) }
         }
 
-        func walk(_ node: Any) {
-            if let dict = node as? [String: Any] {
-                if dict["playlistId"] != nil || dict["musicPlaylistRenderer"] != nil || dict["playlistRenderer"] != nil {
+        screenView.onSeekRatioChanged = { [weak self] ratio, isFinished in
+            self?.seekToRatio(ratio, isFinished: isFinished)
+        }
+
+        screenView.onActiveCoverImageChanged = { [weak self] image in
+            self?.updateAmbientGlow(from: image)
+        }
+
+        screenView.onStreamingRefreshTapped = { [weak self] in
+            self?.refreshStreamingList()
+        }
+
+        renderTopMenu(restoreIndex: 0)
+
+        IPodMusicLibrary.shared.requestAccessAndLoad { [weak self] in
+            self?.renderTopMenu(restoreIndex: 0)
+        }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        bodyGradient.frame = view.bounds
+
+        let glowSize = ambientGlowImageView.bounds.size
+        let screenFrameInGlow = screenView.convert(screenView.bounds, to: ambientGlowImageView)
+        if glowSize.width > 0, glowSize.height > 0, screenFrameInGlow.width > 0, glowSize != lastGlowSize {
+            lastGlowSize = glowSize
+            ambientGlowImageView.image = makeSmoothLcdAmbientImage(
+                canvasSize: glowSize,
+                lcdRect: screenFrameInGlow
+            )
+        }
+    }
+
+    private func setupBodyAndLayout() {
+        view.layer.insertSublayer(bodyGradient, at: 0)
+
+        ambientGlowImageView.contentMode = .scaleToFill
+        ambientGlowImageView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(ambientGlowImageView)
+
+        screenView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(screenView)
+
+        clickWheel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(clickWheel)
+
+        NSLayoutConstraint.activate([
+            screenView.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
+            screenView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
+            screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
+            screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
+
+            ambientGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -36),
+            ambientGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: 32),
+            ambientGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -36),
+            ambientGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 36),
+
+            clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -42),
+            clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.70),
+            clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor)
+        ])
+    }
+
+    private func makeSmoothLcdAmbientImage(
+        canvasSize: CGSize,
+        lcdRect: CGRect
+    ) -> UIImage? {
+        let w = canvasSize.width
+        let h = canvasSize.height
+        guard w > 1, h > 1 else { return nil }
+
+        UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
+        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
+
+        ctx.setFillColor(UIColor.white.withAlphaComponent(0.30).cgColor)
+        ctx.fill(CGRect(origin: .zero, size: canvasSize))
+
+        ctx.setBlendMode(.destinationIn)
+        let leftSoft = max(0.0, min(0.45, (lcdRect.minX - 24.0) / w))
+        let leftFull = max(leftSoft + 0.05, min(0.48, (lcdRect.minX + 6.0) / w))
+        let rightFull = max(0.52, min(0.95, (lcdRect.maxX - 6.0) / w))
+        let rightSoft = max(rightFull + 0.05, min(1.0, (lcdRect.maxX + 24.0) / w))
+
+        let hColors = [
+            UIColor.white.withAlphaComponent(0.0).cgColor,
+            UIColor.white.withAlphaComponent(0.65).cgColor,
+            UIColor.white.withAlphaComponent(1.0).cgColor,
+            UIColor.white.withAlphaComponent(1.0).cgColor,
+            UIColor.white.withAlphaComponent(0.65).cgColor,
+            UIColor.white.withAlphaComponent(0.0).cgColor
+        ] as CFArray
+        let hLocations: [CGFloat] = [0.0, leftSoft, leftFull, rightFull, rightSoft, 1.0]
+
+        if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
+            ctx.drawLinearGradient(
+                hGrad,
+                start: CGPoint(x: 0, y: h * 0.5),
+                end: CGPoint(x: w, y: h * 0.5),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+        }
+
+        let topFadeEnd = max(0.04, min(0.28, (lcdRect.minY + 12.0) / h))
+        let bottomFadeStart = max(topFadeEnd + 0.10, min(0.88, (lcdRect.maxY + (h - lcdRect.maxY) * 0.55) / h))
+
+        let vColors = [
+            UIColor.white.withAlphaComponent(0.0).cgColor,
+            UIColor.white.withAlphaComponent(0.85).cgColor,
+            UIColor.white.withAlphaComponent(1.0).cgColor,
+            UIColor.white.withAlphaComponent(0.75).cgColor,
+            UIColor.white.withAlphaComponent(0.0).cgColor
+        ] as CFArray
+        let vLocations: [CGFloat] = [0.0, topFadeEnd, max(topFadeEnd + 0.04, lcdRect.maxY / h), bottomFadeStart, 1.0]
+
+        if let vGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: vColors, locations: vLocations) {
+            ctx.drawLinearGradient(
+                vGrad,
+                start: CGPoint(x: w * 0.5, y: 0),
+                end: CGPoint(x: w * 0.5, y: h),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+        }
+
+        let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
+        UIGraphicsEndImageContext()
+        return img
+    }
+
+    private func applyThemeToBodyAndWheel() {
+        let theme = screenView.theme
+        clickWheel.applyTheme(theme)
+
+        switch theme {
+        case .darkPod:
+            bodyGradient.colors = [
+                UIColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0).cgColor,
+                UIColor(red: 0.04, green: 0.04, blue: 0.05, alpha: 1.0).cgColor
+            ]
+        case .sepiaPod:
+            bodyGradient.colors = [
+                UIColor(red: 0.90, green: 0.85, blue: 0.76, alpha: 1.0).cgColor,
+                UIColor(red: 0.80, green: 0.74, blue: 0.63, alpha: 1.0).cgColor
+            ]
+        case .classicBlue:
+            bodyGradient.colors = [
+                UIColor(white: 0.88, alpha: 1.0).cgColor,
+                UIColor(white: 0.76, alpha: 1.0).cgColor
+            ]
+        }
+
+        applyGlowColors(currentGlowColor)
+    }
+
+    private func applyGlowColors(_ color: UIColor) {
+        let isDark = (screenView.theme == .darkPod)
+        ambientGlowImageView.tintColor = color
+        ambientGlowImageView.alpha = isDark ? 0.85 : 0.52
+    }
+
+    private func updateAmbientGlow(from image: UIImage?) {
+        let glowColor = extractDominantColor(from: image) ?? (screenView.theme == .darkPod
+            ? UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
+            : UIColor(red: 0.62, green: 0.42, blue: 0.22, alpha: 1.0))
+
+        currentGlowColor = glowColor
+        UIView.animate(withDuration: 0.40) {
+            self.applyGlowColors(glowColor)
+        }
+    }
+
+    private func extractDominantColor(from image: UIImage?) -> UIColor? {
+        guard let cgImage = image?.cgImage else { return nil }
+        let width = 12
+        let height = 12
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        var rawData = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(
+            data: &rawData,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var rTotal: CGFloat = 0
+        var gTotal: CGFloat = 0
+        var bTotal: CGFloat = 0
+        let count = CGFloat(width * height)
+
+        for i in stride(from: 0, to: rawData.count, by: 4) {
+            rTotal += CGFloat(rawData[i]) / 255.0
+            gTotal += CGFloat(rawData[i + 1]) / 255.0
+            bTotal += CGFloat(rawData[i + 2]) / 255.0
+        }
+
+        let avgColor = UIColor(red: rTotal / count, green: gTotal / count, blue: bTotal / count, alpha: 1.0)
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        if avgColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
+            return UIColor(hue: h, saturation: min(1.0, max(s * 1.35, 0.35)), brightness: min(1.0, max(b * 1.18, 0.58)), alpha: 1.0)
+        }
+        return avgColor
+    }
+
+    private func setupAudioSession() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default)
+            try session.setActive(true)
+            UIApplication.shared.beginReceivingRemoteControlEvents()
+        } catch {
+            print("Audio session error: \(error)")
+        }
+    }
+
+    private var isLightAppIconActive: Bool {
+        return UIApplication.shared.alternateIconName == "AppIconLight"
+    }
+
+    private func toggleHomeScreenAppIcon() {
+        guard UIApplication.shared.supportsAlternateIcons else { return }
+        let nextIconName: String? = isLightAppIconActive ? nil : "AppIconLight"
+        UIApplication.shared.setAlternateIconName(nextIconName) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.renderTopMenu(restoreIndex: 2)
+            }
+        }
+    }
+
+    private func refreshStreamingList() {
+        IPodStreamingLibrary.shared.refreshTracks { [weak self] _ in
+            guard let self = self else { return }
+            if let top = self.menuStack.last, case .streamingSongs = top.node {
+                self.menuStack[self.menuStack.count - 1] = (.streamingSongs(pageIndex: 0), 0)
+            }
+            self.renderTopMenu(restoreIndex: 0)
+        }
+    }
+
+    private func triggerShuffleSongs() {
+        let streamingPool = IPodStreamingLibrary.shared.allStreamingTracks
+        let offlinePool = IPodMusicLibrary.shared.allTracks
+        let source = !streamingPool.isEmpty ? streamingPool : offlinePool
+        guard !source.isEmpty else { return }
+
+        var shuffled = source.shuffled()
+        if currentQueue.indices.contains(currentTrackIndex), shuffled.count > 1 {
+            let activeId = currentQueue[currentTrackIndex].id
+            if let first = shuffled.first, first.id == activeId {
+                shuffled.swapAt(0, Int.random(in: 1..<shuffled.count))
+            }
+        }
+        let randomStartIdx = Int.random(in: 0..<shuffled.count)
+        isShuffleActive = true
+        startQueue(tracks: shuffled, at: randomStartIdx, useRelatedOrder: false)
+    }
+
+    // MARK: - Menu Navigation Engine
+    private func rows(for node: IPodMenuNode) -> (title: String, items: [IPodMenuRow]) {
+        switch node {
+        case .root:
+            return ("iPod", [
+                IPodMenuRow(title: "Music", hasSubmenu: true),
+                IPodMenuRow(title: "Streaming", hasSubmenu: true),
+                IPodMenuRow(title: "Settings", hasSubmenu: true)
+            ])
+
+        case .music:
+            return ("Music", [
+                IPodMenuRow(title: "Playlists", hasSubmenu: true),
+                IPodMenuRow(title: "Songs", hasSubmenu: true)
+            ])
+
+        case .streamingSongs(let pageIndex):
+            let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
+            let header = pageData.totalPages > 1
+                ? "Streaming (\(pageData.currentPage + 1)/\(pageData.totalPages))"
+                : "Streaming"
+            return (header, pageData.tracks.map { IPodMenuRow(title: $0.title, hasSubmenu: false) })
+
+        case .playlists:
+            var items = [IPodMenuRow(title: "+ New Playlist...", hasSubmenu: false)]
+            let pls = IPodMusicLibrary.shared.playlists
+            items.append(contentsOf: pls.map { IPodMenuRow(title: $0.name, hasSubmenu: true, valueBadge: "\($0.tracks.count)") })
+            return ("Playlists", items)
+
+        case .playlistTracks(let group):
+            if group.tracks.isEmpty {
+                return (group.name, [IPodMenuRow(title: "Playlist kosong", hasSubmenu: false)])
+            }
+            return (group.name, group.tracks.map { IPodMenuRow(title: $0.title, hasSubmenu: false) })
+
+        case .allSongs:
+            let songs = IPodMusicLibrary.shared.allTracks
+            if songs.isEmpty {
+                return ("Songs", [IPodMenuRow(title: "Sinkronkan lagu ke Music/Documents", hasSubmenu: false)])
+            }
+            return ("Songs", songs.map { IPodMenuRow(title: $0.title, hasSubmenu: false) })
+
+        case .settings:
+            return ("Settings", [
+                IPodMenuRow(
+                    title: "Appearance",
+                    hasSubmenu: false,
+                    valueBadge: screenView.theme.displayName
+                ),
+                IPodMenuRow(
+                    title: "Playlists Menu",
+                    hasSubmenu: false,
+                    valueBadge: isPlaylistsMenuEnabled ? "ON" : "OFF",
+                    isPositiveToggle: isPlaylistsMenuEnabled
+                ),
+                IPodMenuRow(
+                    title: "App Icon",
+                    hasSubmenu: false,
+                    valueBadge: isLightAppIconActive ? "Light" : "Dark"
+                ),
+                IPodMenuRow(
+                    title: "Music Library",
+                    hasSubmenu: false,
+                    valueBadge: "Reload"
+                )
+            ])
+        }
+    }
+
+    private func renderTopMenu(restoreIndex: Int, animateFromNowPlaying: Bool = false) {
+        guard let top = menuStack.last else { return }
+        isNowPlayingActive = false
+
+        if case .allSongs = top.node {
+            let songs = IPodMusicLibrary.shared.allTracks
+            screenView.showSongsCoverFlow(
+                title: "Songs",
+                tracks: songs,
+                selectedIndex: restoreIndex,
+                animateFromNowPlaying: animateFromNowPlaying,
+                showStreamingRefresh: false
+            )
+            return
+        }
+
+        if case .streamingSongs(let pageIndex) = top.node {
+            let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
+            let header = pageData.totalPages > 1
+                ? "Streaming (\(pageData.currentPage + 1)/\(pageData.totalPages))"
+                : "Streaming"
+            screenView.showSongsCoverFlow(
+                title: header,
+                tracks: pageData.tracks,
+                selectedIndex: restoreIndex,
+                animateFromNowPlaying: animateFromNowPlaying,
+                showStreamingRefresh: true
+            )
+            return
+        }
+
+        updateAmbientGlow(from: playingTrackArtwork)
+
+        let isSettings = {
+            if case .settings = top.node { return true }
+            return false
+        }()
+
+        let content = rows(for: top.node)
+        screenView.showMenu(
+            title: content.title,
+            items: content.items,
+            selectedIndex: restoreIndex,
+            isModernSettings: isSettings,
+            showStreamingRefresh: false
+        )
+    }
+
+    private func pushMenu(_ node: IPodMenuNode) {
+        if !menuStack.isEmpty {
+            menuStack[menuStack.count - 1].selectedIndex = screenView.selectedIndex
+        }
+        menuStack.append((node, 0))
+        renderTopMenu(restoreIndex: 0)
+    }
+
+    // MARK: - Buat Playlist Sinkron ke Aplikasi Music Bawaan
+    private func presentCreatePlaylistDialog() {
+        let alert = UIAlertController(
+            title: "New Playlist",
+            message: "Masukkan nama playlist baru (sinkron ke aplikasi Music):",
+            preferredStyle: .alert
+        )
+        alert.addTextField { tf in
+            tf.placeholder = "Contoh: Favorit"
+            tf.autocapitalizationType = .words
+        }
+        alert.addAction(UIAlertAction(title: "Lanjut Pilih Lagu", style: .default) { [weak self] _ in
+            let name = alert.textFields?.first?.text ?? "iPod Playlist"
+            self?.presentTrackSelectionForNewPlaylist(playlistName: name)
+        })
+        alert.addAction(UIAlertAction(title: "Simpan Kosong", style: .default) { [weak self] _ in
+            let name = alert.textFields?.first?.text ?? "iPod Playlist"
+            IPodMusicLibrary.shared.createNativePlaylist(name: name, tracksToAdd: []) { _ in
+                self?.renderTopMenu(restoreIndex: 1)
+            }
+        })
+        alert.addAction(UIAlertAction(title: "Batal", style: .cancel))
+        present(alert, animated: true)
+    }
+
+    private func presentTrackSelectionForNewPlaylist(playlistName: String) {
+        let allSongs = IPodMusicLibrary.shared.allTracks
+        guard !allSongs.isEmpty else {
+            IPodMusicLibrary.shared.createNativePlaylist(name: playlistName, tracksToAdd: []) { [weak self] _ in
+                self?.renderTopMenu(restoreIndex: 1)
+            }
+            return
+        }
+
+        let sheet = UIAlertController(
+            title: "Tambah Lagu ke \"\(playlistName)\"",
+            message: "Pilih lagu dari pustaka Music untuk dimasukkan:",
+            preferredStyle: .actionSheet
+        )
+
+        for track in allSongs.prefix(15) {
+            sheet.addAction(UIAlertAction(title: "\(track.title) - \(track.artist)", style: .default) { [weak self] _ in
+                IPodMusicLibrary.shared.createNativePlaylist(name: playlistName, tracksToAdd: [track]) { _ in
+                    self?.renderTopMenu(restoreIndex: 1)
+                }
+            })
+        }
+
+        sheet.addAction(UIAlertAction(title: "Buat Tanpa Lagu", style: .default) { [weak self] _ in
+            IPodMusicLibrary.shared.createNativePlaylist(name: playlistName, tracksToAdd: []) { _ in
+                self?.renderTopMenu(restoreIndex: 1)
+            }
+        })
+        sheet.addAction(UIAlertAction(title: "Batal", style: .cancel))
+        present(sheet, animated: true)
+    }
+
+    // MARK: - ClickWheelDelegate
+    func clickWheelDidScroll(steps: Int) {
+        if isNowPlayingActive {
+            if let slider = MPVolumeView().subviews.compactMap({ $0 as? UISlider }).first {
+                slider.value = min(max(0, slider.value + Float(steps) * 0.06), 1.0)
+            }
+            return
+        }
+
+        if let top = menuStack.last, case .streamingSongs(let pageIndex) = top.node {
+            let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
+            let proposed = screenView.selectedIndex + steps
+            if pageData.totalPages > 1 {
+                if proposed >= pageData.tracks.count {
+                    let nextPage = (pageData.currentPage + 1) % pageData.totalPages
+                    menuStack[menuStack.count - 1] = (.streamingSongs(pageIndex: nextPage), 0)
+                    renderTopMenu(restoreIndex: 0)
+                    return
+                } else if proposed < 0 && pageData.currentPage > 0 {
+                    let prevPage = pageData.currentPage - 1
+                    let prevCount = IPodStreamingLibrary.shared.tracksPage(pageIndex: prevPage).tracks.count
+                    menuStack[menuStack.count - 1] = (.streamingSongs(pageIndex: prevPage), max(0, prevCount - 1))
+                    renderTopMenu(restoreIndex: max(0, prevCount - 1))
                     return
                 }
-
-                if let renderer = dict["musicResponsiveListItemRenderer"] as? [String: Any] {
-                    if let vid = extractSongVideoId(from: renderer), !seenIds.contains(vid) {
-                        let texts = extractFlexStrings(from: renderer)
-                        let title = texts.first ?? ""
-                        let artist = texts.dropFirst().first ?? "Unknown Artist"
-                        let album = texts.dropFirst(2).first ?? "Single"
-                        if !title.isEmpty && isSongTitleAllowed(title) {
-                            seenIds.insert(vid)
-                            results.append(ParsedSongItem(videoId: vid, title: title, artist: artist, album: album, duration: 205))
-                        }
-                    }
-                } else if let vid = dict["videoId"] as? String, !vid.isEmpty, !seenIds.contains(vid) {
-                    if let titleObj = dict["title"] as? [String: Any],
-                       let titleText = extractText(from: titleObj),
-                       isSongTitleAllowed(titleText) {
-                        let authorText = extractText(from: dict["shortBylineText"] ?? dict["longBylineText"] ?? "") ?? "Unknown Artist"
-                        seenIds.insert(vid)
-                        results.append(ParsedSongItem(videoId: vid, title: titleText, artist: authorText, album: "Single", duration: 205))
-                    }
-                }
-
-                for val in dict.values {
-                    walk(val)
-                }
-            } else if let arr = node as? [Any] {
-                for item in arr {
-                    walk(item)
-                }
             }
         }
 
-        walk(root)
-        return results
+        screenView.moveSelection(by: steps)
     }
 
-    private func extractSongVideoId(from renderer: [String: Any]) -> String? {
-        if let nav = renderer["navigationEndpoint"] as? [String: Any],
-           let watch = nav["watchEndpoint"] as? [String: Any],
-           watch["playlistId"] == nil,
-           let vid = watch["videoId"] as? String {
-            return vid
-        }
-        if let overlay = renderer["overlay"] as? [String: Any],
-           let button = overlay["musicItemThumbnailOverlayRenderer"] as? [String: Any],
-           let content = button["content"] as? [String: Any],
-           let playBtn = content["musicPlayButtonRenderer"] as? [String: Any],
-           let ep = playBtn["playNavigationEndpoint"] as? [String: Any],
-           let watch = ep["watchEndpoint"] as? [String: Any],
-           watch["playlistId"] == nil,
-           let vid = watch["videoId"] as? String {
-            return vid
-        }
-        return nil
-    }
-
-    private func extractFlexStrings(from renderer: [String: Any]) -> [String] {
-        var collected: [String] = []
-        if let cols = renderer["flexColumns"] as? [[String: Any]] {
-            for col in cols {
-                if let colRenderer = col["musicResponsiveListItemFlexColumnRenderer"] as? [String: Any],
-                   let textObj = colRenderer["text"],
-                   let str = extractText(from: textObj),
-                   !str.isEmpty {
-                    collected.append(str)
-                }
-            }
-        }
-        return collected
-    }
-
-    private func extractText(from anyObj: Any) -> String? {
-        if let dict = anyObj as? [String: Any] {
-            if let simple = dict["simpleText"] as? String {
-                return simple
-            }
-            if let runs = dict["runs"] as? [[String: Any]] {
-                let joined = runs.compactMap { $0["text"] as? String }.joined()
-                if !joined.isEmpty { return joined }
-            }
-        }
-        return nil
-    }
-
-    private func resolveStreamViaClients(
-        videoId: String,
-        clients: [MetroLiteStreamClient],
-        index: Int,
-        completion: @escaping (URL?) -> Void
-    ) {
-        guard clients.indices.contains(index) else {
-            completion(nil)
-            return
-        }
-        let client = clients[index]
-        guard let endpoint = URL(string: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false") else {
-            completion(nil)
-            return
-        }
-
-        let payload: [String: Any] = [
-            "context": [
-                "client": [
-                    "clientName": client.clientName,
-                    "clientVersion": client.clientVersion,
-                    "hl": "en",
-                    "gl": "US"
-                ]
-            ],
-            "videoId": videoId,
-            "contentCheckOk": true,
-            "racyCheckOk": true
-        ]
-
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 8.0
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            guard let self = self else { return }
-            guard let data = data,
-                  error == nil,
-                  let http = response as? HTTPURLResponse,
-                  http.statusCode == 200,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                self.resolveStreamViaClients(videoId: videoId, clients: clients, index: index + 1, completion: completion)
-                return
-            }
-
-            if let playability = json["playabilityStatus"] as? [String: Any],
-               let status = playability["status"] as? String,
-               status.uppercased().contains("LOGIN_REQUIRED") {
-                self.resolveStreamViaClients(videoId: videoId, clients: clients, index: index + 1, completion: completion)
-                return
-            }
-
-            if let audioURL = self.extractDirectAudioURL(from: json) {
-                completion(audioURL)
+    func clickWheelDidPressMenu() {
+        if isNowPlayingActive {
+            let activeIndex: Int
+            if let top = menuStack.last, case .allSongs = top.node,
+               currentQueue.indices.contains(currentTrackIndex),
+               let matchedSongIdx = IPodMusicLibrary.shared.allTracks.firstIndex(where: { $0.id == currentQueue[currentTrackIndex].id }) {
+                activeIndex = matchedSongIdx
+                menuStack[menuStack.count - 1].selectedIndex = matchedSongIdx
             } else {
-                self.resolveStreamViaClients(videoId: videoId, clients: clients, index: index + 1, completion: completion)
+                activeIndex = menuStack.last?.selectedIndex ?? 0
             }
-        }.resume()
+            renderTopMenu(restoreIndex: activeIndex, animateFromNowPlaying: true)
+            return
+        }
+        if menuStack.count > 1 {
+            menuStack.removeLast()
+            let prevIndex = menuStack.last?.selectedIndex ?? 0
+            renderTopMenu(restoreIndex: prevIndex)
+        }
     }
 
-    private func extractDirectAudioURL(from playerJSON: [String: Any]) -> URL? {
-        guard let streamingData = playerJSON["streamingData"] as? [String: Any] else { return nil }
-        let adaptiveFormats = streamingData["adaptiveFormats"] as? [[String: Any]] ?? []
-        let formats = streamingData["formats"] as? [[String: Any]] ?? []
-
-        let audioCandidates = adaptiveFormats.filter { fmt in
-            let mime = (fmt["mimeType"] as? String ?? "").lowercased()
-            return (mime.contains("audio/mp4") || mime.contains("audio/mpeg")) && fmt["url"] != nil
+    func clickWheelDidPressSelect() {
+        if isNowPlayingActive {
+            triggerShuffleSongs()
+            return
         }
+        guard let top = menuStack.last else { return }
+        let idx = screenView.selectedIndex
 
-        let sortedAudio = audioCandidates.sorted {
-            let b1 = $0["bitrate"] as? Int ?? 0
-            let b2 = $1["bitrate"] as? Int ?? 0
-            return b1 > b2
-        }
+        switch top.node {
+        case .root:
+            if idx == 0 {
+                if isPlaylistsMenuEnabled {
+                    pushMenu(.music)
+                } else {
+                    pushMenu(.allSongs)
+                }
+            } else if idx == 1 {
+                pushMenu(.streamingSongs(pageIndex: 0))
+            } else if idx == 2 {
+                pushMenu(.settings)
+            }
 
-        for fmt in sortedAudio {
-            if let urlStr = fmt["url"] as? String, let url = URL(string: urlStr) {
-                return url
+        case .music:
+            switch idx {
+            case 0: pushMenu(.playlists)
+            case 1: pushMenu(.allSongs)
+            default: break
+            }
+
+        case .streamingSongs(let pageIndex):
+            let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
+            if pageData.tracks.indices.contains(idx) {
+                let chosen = pageData.tracks[idx]
+                startQueue(
+                    tracks: IPodStreamingLibrary.shared.allStreamingTracks,
+                    at: 0,
+                    selectedTrack: chosen,
+                    useRelatedOrder: true
+                )
+            }
+
+        case .playlists:
+            if idx == 0 {
+                presentCreatePlaylistDialog()
+            } else {
+                let pls = IPodMusicLibrary.shared.playlists
+                let plIndex = idx - 1
+                if pls.indices.contains(plIndex) {
+                    pushMenu(.playlistTracks(pls[plIndex]))
+                }
+            }
+
+        case .playlistTracks(let group):
+            if group.tracks.indices.contains(idx) {
+                startQueue(tracks: group.tracks, at: idx, useRelatedOrder: false)
+            }
+
+        case .allSongs:
+            let songs = IPodMusicLibrary.shared.allTracks
+            if songs.indices.contains(idx) {
+                startQueue(tracks: songs, at: idx, useRelatedOrder: false)
+            }
+
+        case .settings:
+            if idx == 0 {
+                let allThemes = IPodColorTheme.allCases
+                if let currentIdx = allThemes.firstIndex(of: screenView.theme) {
+                    screenView.theme = allThemes[(currentIdx + 1) % allThemes.count]
+                    applyThemeToBodyAndWheel()
+                }
+                renderTopMenu(restoreIndex: 0)
+            } else if idx == 1 {
+                isPlaylistsMenuEnabled.toggle()
+                UserDefaults.standard.set(isPlaylistsMenuEnabled, forKey: "ipod_playlists_enabled")
+                renderTopMenu(restoreIndex: 1)
+            } else if idx == 2 {
+                toggleHomeScreenAppIcon()
+            } else if idx == 3 {
+                IPodMusicLibrary.shared.reloadAllSources()
+                renderTopMenu(restoreIndex: 3)
             }
         }
+    }
 
-        for fmt in formats {
-            if let urlStr = fmt["url"] as? String, let url = URL(string: urlStr) {
-                return url
+    func clickWheelDidPressPlayPause() {
+        if !isNowPlayingActive && (currentQueue.isEmpty || !isPlaying) {
+            triggerShuffleSongs()
+            return
+        }
+        togglePlayPause()
+    }
+
+    func clickWheelDidPressNext() {
+        playNextTrack()
+    }
+
+    func clickWheelDidPressPrevious() {
+        playPreviousTrack()
+    }
+
+    // MARK: - Native AVPlayer Audio Engine
+    private func startQueue(tracks: [IPodTrack], at index: Int, selectedTrack: IPodTrack? = nil, useRelatedOrder: Bool = false) {
+        guard !tracks.isEmpty else { return }
+        let targetTrack: IPodTrack
+        if let explicit = selectedTrack {
+            targetTrack = explicit
+        } else if tracks.indices.contains(index) {
+            targetTrack = tracks[index]
+        } else {
+            return
+        }
+
+        let wasCoverFlow = screenView.isCoverFlowActive
+        if !menuStack.isEmpty {
+            menuStack[menuStack.count - 1].selectedIndex = index
+        }
+
+        if !useRelatedOrder && currentQueue.indices.contains(currentTrackIndex),
+           currentQueue[currentTrackIndex].id == targetTrack.id,
+           player != nil {
+            if !isPlaying {
+                player?.play()
+                isPlaying = true
+                screenView.updatePlayState(isPlaying: true)
             }
+            openNowPlayingScreen(animateFromCoverFlow: wasCoverFlow)
+            return
         }
 
-        return nil
+        if useRelatedOrder {
+            isShuffleActive = false
+            currentQueue = IPodStreamingLibrary.shared.buildRelatedQueue(startingWith: targetTrack, in: tracks)
+            currentTrackIndex = 0
+        } else {
+            currentQueue = tracks
+            currentTrackIndex = tracks.firstIndex(where: { $0.id == targetTrack.id }) ?? max(0, min(index, tracks.count - 1))
+        }
+
+        playTrack(at: currentTrackIndex, transitionDirection: 0)
+        openNowPlayingScreen(animateFromCoverFlow: wasCoverFlow)
     }
 
-    private func loadSongsCatalog(reshuffle: Bool = false) {
-        let songs: [(title: String, artist: String, album: String, duration: TimeInterval)] = [
-            ("Hati-Hati di Jalan", "Tulus", "Manusia", 262),
-            ("Monokrom", "Tulus", "Monokrom", 213),
-            ("Bertaut", "Nadin Amizah", "Selamat Ulang Tahun", 295),
-            ("Sorai", "Nadin Amizah", "Kalah Bertaruh", 244),
-            ("Komang", "Raim Laode", "Komang", 222),
-            ("Sial", "Mahalini", "Fabula", 240),
-            ("Rewrite The Stars", "Anne-Marie & James Arthur", "The Greatest Showman", 218),
-            ("Shape of You", "Ed Sheeran", "Divide", 233),
-            ("Blinding Lights", "The Weeknd", "After Hours", 200),
-            ("As It Was", "Harry Styles", "Harry's House", 167),
-            ("Lathi", "Weird Genius ft. Sara Fajira", "Lathi", 184),
-            ("Runtuh", "Feby Putri ft. Fiersa Besari", "Riuh", 252),
-            ("Cukup", "Ziva Magnolya", "Magnolya", 241),
-            ("Glimpse of Us", "Joji", "SMITHEREENS", 233),
-            ("Snooze", "SZA", "SOS", 201),
-            ("Cruel Summer", "Taylor Swift", "Lover", 178),
-            ("About You", "The 1975", "Being Funny", 326)
-        ]
-
-        var list: [IPodTrack] = []
-        for idx in 0..<100 {
-            let s = songs[idx % songs.count]
-            let title = idx < songs.count ? s.title : "\(s.title) (\(idx / songs.count + 1))"
-            let art = makeLowResArtwork(title: title, artist: s.artist, tag: "Song")
-            let streamURL = URL(string: verifiedAudioStreams[idx % verifiedAudioStreams.count])
-            list.append(makeTrack(
-                id: "track_\(idx)_\(s.title)",
-                title: title,
-                artist: s.artist,
-                album: s.album,
-                duration: s.duration,
-                assetURL: streamURL,
-                artworkImage: art
-            ))
-        }
-        allStreamingTracks = reshuffle ? list.shuffled() : list
-    }
-
-    private func makeLowResArtwork(title: String, artist: String, tag: String) -> UIImage? {
-        let key = "\(artist)_\(tag)"
-        if let cached = artworkCache[key] {
-            return cached
-        }
-
-        let hash = abs(key.hashValue)
-        let hue = CGFloat(hash % 360) / 360.0
-        let bgColor = UIColor(hue: hue, saturation: 0.56, brightness: 0.34, alpha: 1.0)
-        let accentColor = UIColor(hue: fmod(hue + 0.16, 1.0), saturation: 0.70, brightness: 0.76, alpha: 1.0)
-
-        let size = CGSize(width: 96, height: 96)
-        UIGraphicsBeginImageContextWithOptions(size, true, 1.0)
-        defer { UIGraphicsEndImageContext() }
-
-        bgColor.setFill()
-        UIRectFill(CGRect(origin: .zero, size: size))
-
-        accentColor.withAlphaComponent(0.30).setFill()
-        UIBezierPath(ovalIn: CGRect(x: -10, y: -10, width: 68, height: 68)).fill()
-
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: 28, weight: .bold),
-            .foregroundColor: UIColor.white
-        ]
-        let glyph = "♪"
-        let gSize = glyph.size(withAttributes: attrs)
-        glyph.draw(
-            at: CGPoint(x: (size.width - gSize.width) / 2.0, y: (size.height - gSize.height) / 2.0 - 5),
-            withAttributes: attrs
+    private func openNowPlayingScreen(transitionDirection: Int = 0, animateFromCoverFlow: Bool = false) {
+        guard currentQueue.indices.contains(currentTrackIndex) else { return }
+        isNowPlayingActive = true
+        let track = currentQueue[currentTrackIndex]
+        screenView.showNowPlaying(
+            track: track,
+            index: currentTrackIndex,
+            total: currentQueue.count,
+            transitionDirection: transitionDirection,
+            animateFromCoverFlow: animateFromCoverFlow
         )
+    }
 
-        let tagAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: 8.5, weight: .semibold),
-            .foregroundColor: UIColor.white.withAlphaComponent(0.88)
-        ]
-        let label = tag.uppercased()
-        let lSize = label.size(withAttributes: tagAttrs)
-        label.draw(
-            at: CGPoint(x: (size.width - lSize.width) / 2.0, y: size.height - lSize.height - 7),
-            withAttributes: tagAttrs
-        )
+    private func playTrack(at index: Int, transitionDirection: Int = 0) {
+        guard currentQueue.indices.contains(index) else { return }
+        let track = currentQueue[index]
 
-        let img = UIGraphicsGetImageFromCurrentImageContext()
-        if let img = img {
-            artworkCache[key] = img
+        if let obs = endObserver {
+            NotificationCenter.default.removeObserver(obs)
+            endObserver = nil
         }
-        return img
+
+        isPlaying = true
+        playingTrackArtwork = track.artworkImage
+        screenView.updatePlayState(isPlaying: true)
+        updateAmbientGlow(from: track.artworkImage)
+
+        if isNowPlayingActive {
+            screenView.showNowPlaying(
+                track: track,
+                index: index,
+                total: currentQueue.count,
+                transitionDirection: transitionDirection,
+                animateFromCoverFlow: false
+            )
+        }
+
+        IPodStreamingLibrary.shared.resolvePlayableAudioURL(for: track) { [weak self] resolvedURL in
+            guard let self = self, let url = resolvedURL ?? track.assetURL else { return }
+            guard self.currentQueue.indices.contains(self.currentTrackIndex),
+                  self.currentQueue[self.currentTrackIndex].id == track.id else { return }
+
+            let item = AVPlayerItem(url: url)
+            self.player = AVPlayer(playerItem: item)
+            self.player?.play()
+
+            self.endObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                self?.playNextTrack()
+            }
+
+            self.startProgressTimer()
+            self.updateNowPlayingInfo(track: track, elapsed: 0)
+        }
+    }
+
+    private func seekToRatio(_ ratio: Double, isFinished: Bool) {
+        guard let player = player, currentQueue.indices.contains(currentTrackIndex) else { return }
+        let track = currentQueue[currentTrackIndex]
+        let itemDur = player.currentItem.map { CMTimeGetSeconds($0.duration) } ?? track.duration
+        let validDur = (itemDur.isFinite && itemDur > 0) ? itemDur : track.duration
+        guard validDur > 0 else { return }
+
+        let targetSec = validDur * ratio
+        screenView.updateProgress(elapsed: targetSec, duration: validDur, fromScrub: true)
+
+        if isFinished {
+            let targetTime = CMTime(seconds: targetSec, preferredTimescale: 600)
+            player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                if self?.isPlaying == true && player.rate == 0 {
+                    player.play()
+                }
+            }
+            updateNowPlayingInfo(track: track, elapsed: targetSec)
+        }
+    }
+
+    private func togglePlayPause() {
+        guard let player = player, currentQueue.indices.contains(currentTrackIndex) else {
+            triggerShuffleSongs()
+            return
+        }
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+        } else {
+            player.play()
+            isPlaying = true
+        }
+        screenView.updatePlayState(isPlaying: isPlaying)
+        let track = currentQueue[currentTrackIndex]
+        let elapsed = CMTimeGetSeconds(player.currentTime())
+        updateNowPlayingInfo(track: track, elapsed: elapsed.isFinite ? elapsed : 0)
+    }
+
+    private func playNextTrack() {
+        guard !currentQueue.isEmpty else { return }
+        currentTrackIndex = (currentTrackIndex + 1) % currentQueue.count
+        playTrack(at: currentTrackIndex, transitionDirection: 1)
+    }
+
+    private func playPreviousTrack() {
+        guard !currentQueue.isEmpty else { return }
+        if let player = player, CMTimeGetSeconds(player.currentTime()) > 4.0 {
+            player.seek(to: .zero)
+            return
+        }
+        currentTrackIndex = (currentTrackIndex - 1 + currentQueue.count) % currentQueue.count
+        playTrack(at: currentTrackIndex, transitionDirection: -1)
+    }
+
+    private func startProgressTimer() {
+        playbackTimer?.invalidate()
+        playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self = self, let player = self.player,
+                  self.currentQueue.indices.contains(self.currentTrackIndex) else { return }
+            let track = self.currentQueue[self.currentTrackIndex]
+            let elapsed = CMTimeGetSeconds(player.currentTime())
+            let itemDur = player.currentItem.map { CMTimeGetSeconds($0.duration) } ?? track.duration
+            let validDur = (itemDur.isFinite && itemDur > 0) ? itemDur : track.duration
+            if elapsed.isFinite {
+                self.screenView.updateProgress(elapsed: elapsed, duration: validDur)
+                self.updateNowPlayingInfo(track: track, elapsed: elapsed)
+            }
+        }
+    }
+
+    private func updateNowPlayingInfo(track: IPodTrack, elapsed: TimeInterval) {
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: track.title,
+            MPMediaItemPropertyArtist: track.artist,
+            MPMediaItemPropertyAlbumTitle: track.album,
+            MPMediaItemPropertyPlaybackDuration: track.duration,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: elapsed,
+            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0
+        ]
+        if let art = track.artworkImage {
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
+        }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    private func setupRemoteCommands() {
+        let cc = MPRemoteCommandCenter.shared()
+        cc.playCommand.isEnabled = true
+        cc.playCommand.addTarget { [weak self] _ in
+            if self?.isPlaying == false { self?.togglePlayPause() }
+            return .success
+        }
+        cc.pauseCommand.isEnabled = true
+        cc.pauseCommand.addTarget { [weak self] _ in
+            if self?.isPlaying == true { self?.togglePlayPause() }
+            return .success
+        }
+        cc.togglePlayPauseCommand.isEnabled = true
+        cc.togglePlayPauseCommand.addTarget { [weak self] _ in
+            self?.togglePlayPause()
+            return .success
+        }
+        cc.nextTrackCommand.isEnabled = true
+        cc.nextTrackCommand.addTarget { [weak self] _ in
+            self?.playNextTrack()
+            return .success
+        }
+        cc.previousTrackCommand.isEnabled = true
+        cc.previousTrackCommand.addTarget { [weak self] _ in
+            self?.playPreviousTrack()
+            return .success
+        }
     }
 }

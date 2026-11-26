@@ -53,7 +53,6 @@ final class IPodStreamingLibrary {
     ]
     private var queryCursor: Int = 0
 
-    // Aliran audio MP3/MP4 publik cadangan per lagu agar pemutar AVPlayer selalu dapat memutar saat cipher/token membatasi URL langsung
     private let verifiedAudioStreams: [String] = [
         "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
         "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
@@ -188,7 +187,6 @@ final class IPodStreamingLibrary {
                 return
             }
 
-            // Fallback ke aliran audio yang pasti dapat diputar bila stream terproteksi cipher/token
             if let fURL = fallbackStreamURL {
                 self.resolvedAudioURLCache[track.id] = fURL
             }
@@ -281,13 +279,13 @@ final class IPodStreamingLibrary {
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            guard let self = self,
-                  let data = data,
+            guard let self = self else { return }
+            guard let data = data,
                   error == nil,
                   let http = response as? HTTPURLResponse,
                   http.statusCode == 200,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                self?.searchInnerTubeSongsOnly(query: query, clients: clients, index: index + 1, completion: completion)
+                self.searchInnerTubeSongsOnly(query: query, clients: clients, index: index + 1, completion: completion)
                 return
             }
 
@@ -295,12 +293,11 @@ final class IPodStreamingLibrary {
             if !songs.isEmpty {
                 completion(songs)
             } else {
-                self?.searchInnerTubeSongsOnly(query: query, clients: clients, index: index + 1, completion: completion)
+                self.searchInnerTubeSongsOnly(query: query, clients: clients, index: index + 1, completion: completion)
             }
         }.resume()
     }
 
-    // Menyaring hanya item lagu tunggal (bukan playlist, bukan kompilasi/mix panjang)
     private func extractOnlySongsFromSearchJSON(_ root: Any) -> [ParsedSongItem] {
         var results: [ParsedSongItem] = []
         var seenIds = Set<String>()
@@ -313,7 +310,6 @@ final class IPodStreamingLibrary {
         }
 
         func walk(_ node: Any) {
-            // Lewati blok playlist/album/shelf milik playlist sepenuhnya
             if let dict = node as? [String: Any] {
                 if dict["playlistId"] != nil || dict["musicPlaylistRenderer"] != nil || dict["playlistRenderer"] != nil {
                     return
@@ -440,13 +436,13 @@ final class IPodStreamingLibrary {
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            guard let self = self,
-                  let data = data,
+            guard let self = self else { return }
+            guard let data = data,
                   error == nil,
                   let http = response as? HTTPURLResponse,
                   http.statusCode == 200,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                self?.resolveStreamViaClients(videoId: videoId, clients: clients, index: index + 1, completion: completion)
+                self.resolveStreamViaClients(videoId: videoId, clients: clients, index: index + 1, completion: completion)
                 return
             }
 
