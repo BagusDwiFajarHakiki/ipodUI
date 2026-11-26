@@ -35,6 +35,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var isPlaying = false
     private var isShuffleActive = false
 
+    // Stream Watchdog Tweak state
+    private var lastObservedElapsed: TimeInterval = -1
+    private var stuckTicks: Int = 0
+    private var watchdogRecoveriesForCurrentTrack: Int = 0
+
     override var prefersStatusBarHidden: Bool {
         return true
     }
@@ -669,7 +674,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         playPreviousTrack()
     }
 
-    // MARK: - Native AVPlayer Audio Engine
+    // MARK: - Native AVPlayer Audio Engine + Stream Watchdog Tweak
     private func startQueue(tracks: [IPodTrack], at index: Int, selectedTrack: IPodTrack? = nil, useRelatedOrder: Bool = false) {
         guard !tracks.isEmpty else { return }
         let targetTrack: IPodTrack
@@ -707,6 +712,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             currentTrackIndex = tracks.firstIndex(where: { $0.id == targetTrack.id }) ?? max(0, min(index, tracks.count - 1))
         }
 
+        watchdogRecoveriesForCurrentTrack = 0
         playTrack(at: currentTrackIndex, transitionDirection: 0)
         openNowPlayingScreen(animateFromCoverFlow: wasCoverFlow)
     }
@@ -739,18 +745,27 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
-    private func playTrack(at index: Int, transitionDirection: Int = 0) {
+    private func resetWatchdogState() {
+        lastObservedElapsed = -1
+        stuckTicks = 0
+    }
+
+    private func playTrack(at index: Int, transitionDirection: Int = 0, resumeFromSeconds: Double = 0, isWatchdogRetry: Bool = false) {
         guard currentQueue.indices.contains(index) else { return }
         let track = currentQueue[index]
 
         clearItemObservers()
+        resetWatchdogState()
+        if !isWatchdogRetry {
+            watchdogRecoveriesForCurrentTrack = 0
+        }
 
         isPlaying = true
         playingTrackArtwork = track.artworkImage
         screenView.updatePlayState(isPlaying: true)
         updateAmbientGlow(from: track.artworkImage)
 
-        if isNowPlayingActive {
+        if isNowPlayingActive && !isWatchdogRetry {
             screenView.showNowPlaying(
                 track: track,
                 index: index,
@@ -760,15 +775,15 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             )
         }
 
-        if track.id.hasPrefix("innertube_") {
-            IPodStreamingLibrary.shared.resolvePlayableAudio(for: track) { [weak self] result in
+        if track.id.hasPrefix("stream_") {
+            IPodStreamingLibrary.shared.resolvePlayableAudio(for: track, forceRefresh: isWatchdogRetry) { [weak self] result in
                 guard let self = self else { return }
                 guard self.currentQueue.indices.contains(self.currentTrackIndex),
                       self.currentQueue[self.currentTrackIndex].id == track.id else { return }
 
                 switch result {
                 case .playable(let url):
-                    self.startAVPlayer(with: url, track: track)
+                    self.startAVPlayer(with: url, track: track, resumeFromSeconds: resumeFromSeconds)
                 case .failed(let reason):
                     self.screenView.showStatusBanner("Gagal Putar: \(reason)")
                     self.playNextTrack()
@@ -778,7 +793,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         if let url = track.assetURL {
-            startAVPlayer(with: url, track: track)
+            startAVPlayer(with: url, track: track, resumeFromSeconds: resumeFromSeconds)
         } else {
             isPlaying = false
             screenView.updatePlayState(isPlaying: false)
@@ -786,7 +801,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
-    private func startAVPlayer(with url: URL, track: IPodTrack) {
+    private func startAVPlayer(with url: URL, track: IPodTrack, resumeFromSeconds: Double = 0) {
         let headers: [String: String] = [
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 12_5_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1.2 Mobile/15E148 Safari/604.1"
         ]
@@ -794,7 +809,14 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         let item = AVPlayerItem(asset: asset)
 
         player = AVPlayer(playerItem: item)
-        player?.play()
+        if resumeFromSeconds > 1.0 {
+            let seekTarget = CMTime(seconds: resumeFromSeconds, preferredTimescale: 600)
+            player?.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                self?.player?.play()
+            }
+        } else {
+            player?.play()
+        }
 
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
@@ -809,8 +831,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             object: item,
             queue: .main
         ) { [weak self] _ in
-            IPodStreamingLibrary.shared.invalidateCachedURL(for: track)
-            self?.playNextTrack()
+            self?.triggerWatchdogRecovery(for: track, item: item)
         }
 
         failedEndObserver = NotificationCenter.default.addObserver(
@@ -818,12 +839,36 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             object: item,
             queue: .main
         ) { [weak self] _ in
-            IPodStreamingLibrary.shared.invalidateCachedURL(for: track)
-            self?.playNextTrack()
+            self?.triggerWatchdogRecovery(for: track, item: item)
         }
 
         startProgressTimer()
-        updateNowPlayingInfo(track: track, elapsed: 0)
+        updateNowPlayingInfo(track: track, elapsed: resumeFromSeconds)
+    }
+
+    // Stream Watchdog Tweak: memulihkan pemutaran jika tersangkut / mentok di tengah lagu (seperti detik ke-59)
+    private func triggerWatchdogRecovery(for track: IPodTrack, item: AVPlayerItem) {
+        guard isPlaying, currentQueue.indices.contains(currentTrackIndex),
+              currentQueue[currentTrackIndex].id == track.id else { return }
+
+        let currentSec = CMTimeGetSeconds(item.currentTime())
+        let safeSec = currentSec.isFinite && currentSec > 0 ? currentSec : max(0, lastObservedElapsed)
+        let totalDur = CMTimeGetSeconds(item.duration)
+
+        if totalDur.isFinite && totalDur > 5.0 && safeSec >= totalDur - 2.5 {
+            playNextTrack()
+            return
+        }
+
+        if watchdogRecoveriesForCurrentTrack < 3 {
+            watchdogRecoveriesForCurrentTrack += 1
+            resetWatchdogState()
+            IPodStreamingLibrary.shared.invalidateCachedURL(for: track)
+            playTrack(at: currentTrackIndex, transitionDirection: 0, resumeFromSeconds: safeSec, isWatchdogRetry: true)
+            return
+        }
+
+        playNextTrack()
     }
 
     private func seekToRatio(_ ratio: Double, isFinished: Bool) {
@@ -837,6 +882,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         screenView.updateProgress(elapsed: targetSec, duration: validDur, fromScrub: true)
 
         if isFinished {
+            resetWatchdogState()
             let targetTime = CMTime(seconds: targetSec, preferredTimescale: 600)
             player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                 if self?.isPlaying == true && player.rate == 0 {
@@ -855,9 +901,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         if isPlaying {
             player.pause()
             isPlaying = false
+            resetWatchdogState()
         } else {
             player.play()
             isPlaying = true
+            resetWatchdogState()
         }
         screenView.updatePlayState(isPlaying: isPlaying)
         let track = currentQueue[currentTrackIndex]
@@ -875,6 +923,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         guard !currentQueue.isEmpty else { return }
         if let player = player, CMTimeGetSeconds(player.currentTime()) > 4.0 {
             player.seek(to: .zero)
+            resetWatchdogState()
             return
         }
         currentTrackIndex = (currentTrackIndex - 1 + currentQueue.count) % currentQueue.count
@@ -884,15 +933,32 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func startProgressTimer() {
         playbackTimer?.invalidate()
         playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            guard let self = self, let player = self.player,
+            guard let self = self, let player = self.player, let item = player.currentItem,
                   self.currentQueue.indices.contains(self.currentTrackIndex) else { return }
             let track = self.currentQueue[self.currentTrackIndex]
             let elapsed = CMTimeGetSeconds(player.currentTime())
-            let itemDur = player.currentItem.map { CMTimeGetSeconds($0.duration) } ?? track.duration
+            let itemDur = CMTimeGetSeconds(item.duration)
             let validDur = (itemDur.isFinite && itemDur > 0) ? itemDur : track.duration
+
             if elapsed.isFinite {
                 self.screenView.updateProgress(elapsed: elapsed, duration: validDur)
                 self.updateNowPlayingInfo(track: track, elapsed: elapsed)
+
+                // Deteksi waktu berhenti/mentok saat sedang memutar (misalnya di detik ke-59)
+                if self.isPlaying && player.rate == 0 && elapsed > 5.0 {
+                    if abs(elapsed - self.lastObservedElapsed) < 0.25 {
+                        self.stuckTicks += 1
+                        if self.stuckTicks >= 5 {
+                            self.triggerWatchdogRecovery(for: track, item: item)
+                        }
+                    } else {
+                        self.lastObservedElapsed = elapsed
+                        self.stuckTicks = 0
+                    }
+                } else {
+                    self.lastObservedElapsed = elapsed
+                    self.stuckTicks = 0
+                }
             }
         }
     }
