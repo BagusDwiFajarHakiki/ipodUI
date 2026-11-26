@@ -242,35 +242,35 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        // 1. Subtle soft aura tucked behind the LCD screen
+        // 1. Soft halo peeking out around top, left, and right edges of the LCD
         drawEllipticalGlow(
             in: ctx,
-            center: CGPoint(x: lcdRect.midX, y: lcdRect.midY + lcdRect.height * 0.14),
-            rx: lcdRect.width * 0.60,
-            ry: lcdRect.height * 0.72,
-            peakAlpha: 0.20
+            center: CGPoint(x: lcdRect.midX, y: lcdRect.midY + lcdRect.height * 0.04),
+            rx: max(w * 0.62, lcdRect.width * 0.72),
+            ry: lcdRect.height * 0.82,
+            peakAlpha: 0.25
         )
 
         // 2. Main soft glow emerging from behind the lower LCD edge
-        let upperCenterY = lcdRect.maxY - lcdRect.height * 0.06
-        let upperReachY = max(120.0, wheelRect.midY - upperCenterY)
+        let upperCenterY = lcdRect.maxY - lcdRect.height * 0.04
+        let upperReachY = max(145.0, (wheelRect.midY - upperCenterY) + 36.0)
         drawEllipticalGlow(
             in: ctx,
             center: CGPoint(x: lcdRect.midX, y: upperCenterY),
-            rx: lcdRect.width * 0.54,
+            rx: w * 0.66,
             ry: upperReachY,
             peakAlpha: 0.28
         )
 
-        // 3. Wider downward diffusion enveloping the gap and scroll wheel area
-        let lowerCenterY = (lcdRect.maxY + wheelRect.midY) * 0.50
-        let lowerReachY = max(140.0, (wheelRect.maxY + 18.0) - lowerCenterY)
+        // 3. Wide downward diffusion enveloping the gap and extending past the scroll wheel
+        let lowerCenterY = (lcdRect.maxY + wheelRect.midY) * 0.54
+        let lowerReachY = max(180.0, (h - lowerCenterY) + 16.0)
         drawEllipticalGlow(
             in: ctx,
             center: CGPoint(x: wheelRect.midX, y: lowerCenterY),
-            rx: w * 0.64,
+            rx: w * 0.82,
             ry: lowerReachY,
-            peakAlpha: 0.24
+            peakAlpha: 0.26
         )
 
         let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)

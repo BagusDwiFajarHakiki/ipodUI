@@ -245,9 +245,10 @@ class IPodCoverFlowCell: UICollectionViewCell {
         reflectionMask.frame = reflectionImageView.bounds
     }
 
-    func configure(image: UIImage?) {
+    func configure(image: UIImage?, showReflection: Bool = true) {
         coverImageView.image = image
-        reflectionImageView.image = image
+        reflectionImageView.isHidden = !showReflection
+        reflectionImageView.image = showReflection ? image : nil
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -1374,32 +1375,15 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     private func makeRefreshCoverImage() -> UIImage? {
         let size = CGSize(width: 100, height: 100)
-        UIGraphicsBeginImageContextWithOptions(size, true, 0)
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
         defer { UIGraphicsEndImageContext() }
-        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        let bgColors: [CGColor]
-        let glyphColor: UIColor
-        if theme == .darkPod {
-            bgColors = [
-                UIColor(red: 0.16, green: 0.17, blue: 0.21, alpha: 1.0).cgColor,
-                UIColor(red: 0.09, green: 0.10, blue: 0.13, alpha: 1.0).cgColor
-            ]
-            glyphColor = UIColor(white: 0.92, alpha: 1.0)
-        } else {
-            bgColors = [
-                theme.highlightTop.withAlphaComponent(0.22).cgColor,
-                theme.highlightBottom.withAlphaComponent(0.36).cgColor
-            ]
-            glyphColor = theme.primaryText
-        }
-
-        if let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: bgColors as CFArray, locations: [0.0, 1.0]) {
-            ctx.drawLinearGradient(grad, start: .zero, end: CGPoint(x: 0, y: size.height), options: [])
-        }
+        let glyphColor: UIColor = theme == .darkPod
+            ? UIColor(white: 0.92, alpha: 1.0)
+            : theme.primaryText
 
         let center = CGPoint(x: size.width / 2.0, y: size.height / 2.0)
-        let radius: CGFloat = 20.0
+        let radius: CGFloat = 18.0
         let startAngle: CGFloat = -.pi * 0.25
         let endAngle: CGFloat = .pi * 1.45
 
@@ -1410,20 +1394,20 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             endAngle: endAngle,
             clockwise: true
         )
-        arcPath.lineWidth = 4.0
+        arcPath.lineWidth = 3.6
         arcPath.lineCapStyle = .round
         glyphColor.setStroke()
         arcPath.stroke()
 
-        // Arrowhead pointing clockwise at endAngle (top-left/top of arc)
+        // Arrowhead pointing clockwise at endAngle
         let tipX = center.x + radius * cos(endAngle)
         let tipY = center.y + radius * sin(endAngle)
         let tangentAngle = endAngle + .pi / 2.0
-        let headLen: CGFloat = 10.0
+        let headLen: CGFloat = 9.0
         let wingAngle: CGFloat = .pi * 0.78
 
         let arrowPath = UIBezierPath()
-        arrowPath.move(to: CGPoint(x: tipX + 3.0 * cos(tangentAngle), y: tipY + 3.0 * sin(tangentAngle)))
+        arrowPath.move(to: CGPoint(x: tipX + 2.8 * cos(tangentAngle), y: tipY + 2.8 * sin(tangentAngle)))
         arrowPath.addLine(to: CGPoint(x: tipX + headLen * cos(tangentAngle + wingAngle), y: tipY + headLen * sin(tangentAngle + wingAngle)))
         arrowPath.addLine(to: CGPoint(x: tipX + headLen * cos(tangentAngle - wingAngle), y: tipY + headLen * sin(tangentAngle - wingAngle)))
         arrowPath.close()
@@ -1442,9 +1426,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "CoverCell", for: indexPath) as! IPodCoverFlowCell
         switch coverItems[indexPath.item] {
         case .track(let track):
-            cell.configure(image: track.artworkImage ?? makeDefaultNoteArtwork())
+            cell.configure(image: track.artworkImage ?? makeDefaultNoteArtwork(), showReflection: true)
         case .refresh:
-            cell.configure(image: makeRefreshCoverImage())
+            cell.configure(image: makeRefreshCoverImage(), showReflection: false)
         }
         return cell
     }
