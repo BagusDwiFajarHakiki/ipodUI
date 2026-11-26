@@ -102,10 +102,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
+            // Ruang ekstra kiri & kanan agar pendaran selebar LCD + sedikit lebih lebar tetap bisa memudar
             lcdEdgeGlowImageView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -40),
             lcdEdgeGlowImageView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: 28),
-            lcdEdgeGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -40),
-            lcdEdgeGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 40),
+            lcdEdgeGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: -48),
+            lcdEdgeGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 48),
 
             clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -42),
             clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -114,7 +115,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         ])
     }
 
-    // Lebar cahaya di bawah disamakan persis dengan cahaya sekeliling LCD agar menyatu seamless
+    // Lebar cahaya disamakan dengan LCD ditambah sedikit pelebaran di kiri & kanan agar proporsional dan memudar halus
     private func makeNaturalLcdGlowImage(
         canvasSize: CGSize,
         lcdRect: CGRect,
@@ -123,12 +124,16 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        let surroundFeather: CGFloat = 38.0
-        let surroundSteps = 32
+        let extraSideWidth: CGFloat = 10.0
+        let baseGlowRect = lcdRect.insetBy(dx: -extraSideWidth, dy: 0)
+
+        // 1. Pendaran di sekeliling tepi LCD (atas, kiri, kanan, bawah)
+        let surroundFeather: CGFloat = 26.0
+        let surroundSteps = 30
         for i in 0..<surroundSteps {
             let t = CGFloat(i) / CGFloat(surroundSteps - 1)
             let expand = t * surroundFeather
-            let rect = lcdRect.insetBy(dx: -expand, dy: -expand)
+            let rect = baseGlowRect.insetBy(dx: -expand, dy: -expand)
             let alpha = pow(1.0 - t, 2.3) * 0.095
             ctx.setFillColor(UIColor.white.withAlphaComponent(alpha).cgColor)
             let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius + expand)
@@ -136,42 +141,50 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             ctx.fillPath()
         }
 
-        // Perpanjangan ke bawah dengan lebar sama persis seperti cahaya di sekeliling LCD
+        // 2. Perpanjangan cahaya ke bawah dengan lebar sama persis dengan baseGlowRect (LCD + sedikit pelebaran)
         let downExtensionHeight = max(0, canvasSize.height - lcdRect.maxY)
         if downExtensionHeight > 0 {
-            let downSteps = 36
+            let downSteps = 34
             for i in 0..<downSteps {
                 let t = CGFloat(i) / CGFloat(downSteps - 1)
                 let currentHeight = t * downExtensionHeight
-                let expandX = surroundFeather * 0.85
                 let downRect = CGRect(
-                    x: lcdRect.minX - expandX,
+                    x: baseGlowRect.minX,
                     y: lcdRect.maxY - 2,
-                    width: lcdRect.width + expandX * 2,
+                    width: baseGlowRect.width,
                     height: max(2, currentHeight)
                 )
-                let alpha = (1.0 - t * 0.65) * pow(1.0 - t, 1.15) * 0.078
+                let alpha = (1.0 - t * 0.65) * pow(1.0 - t, 1.15) * 0.082
                 ctx.setFillColor(UIColor.white.withAlphaComponent(alpha).cgColor)
-                let path = UIBezierPath(roundedRect: downRect, cornerRadius: cornerRadius + expandX)
+                let path = UIBezierPath(roundedRect: downRect, cornerRadius: cornerRadius + t * 8.0)
                 ctx.addPath(path.cgPath)
                 ctx.fillPath()
             }
         }
 
+        // 3. Mask horizontal & vertikal agar tepi kiri, kanan, dan bawah memudar lembut tanpa menyempit
         ctx.setBlendMode(.destinationIn)
         let maskWidth = canvasSize.width
         let maskHeight = canvasSize.height
 
+        let leftEdgeRatio = max(0.02, min(0.45, (baseGlowRect.minX - 18.0) / max(1.0, maskWidth)))
+        let rightEdgeRatio = max(0.55, min(0.98, (baseGlowRect.maxX + 18.0) / max(1.0, maskWidth)))
         let hColors = [
             UIColor.white.withAlphaComponent(0.0).cgColor,
-            UIColor.white.withAlphaComponent(0.32).cgColor,
-            UIColor.white.withAlphaComponent(0.85).cgColor,
+            UIColor.white.withAlphaComponent(0.75).cgColor,
             UIColor.white.withAlphaComponent(1.0).cgColor,
-            UIColor.white.withAlphaComponent(0.85).cgColor,
-            UIColor.white.withAlphaComponent(0.32).cgColor,
+            UIColor.white.withAlphaComponent(1.0).cgColor,
+            UIColor.white.withAlphaComponent(0.75).cgColor,
             UIColor.white.withAlphaComponent(0.0).cgColor
         ] as CFArray
-        let hLocations: [CGFloat] = [0.04, 0.18, 0.32, 0.50, 0.68, 0.82, 0.96]
+        let hLocations: [CGFloat] = [
+            0.0,
+            leftEdgeRatio,
+            min(0.48, leftEdgeRatio + 0.08),
+            max(0.52, rightEdgeRatio - 0.08),
+            rightEdgeRatio,
+            1.0
+        ]
         if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
             ctx.drawLinearGradient(
                 hGrad,
@@ -314,7 +327,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         startQueue(tracks: shuffled, at: randomStartIdx)
     }
 
-    // MARK: - Menu Navigation Engine (Tanpa Menu Shuffle Songs)
+    // MARK: - Menu Navigation Engine
     private func rows(for node: IPodMenuNode) -> (title: String, items: [IPodMenuRow]) {
         switch node {
         case .root:
@@ -504,7 +517,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     func clickWheelDidPressSelect() {
-        // Di halaman Now Playing, tombol tengah scroll wheel berfungsi sebagai Shuffle Songs
         if isNowPlayingActive {
             triggerShuffleSongs()
             return
@@ -575,7 +587,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     func clickWheelDidPressPlayPause() {
-        // Saat di halaman utama dan tidak ada musik yang sedang diputar/aktif, tombol bawah berfungsi sebagai Shuffle Songs
         if !isNowPlayingActive && (currentQueue.isEmpty || !isPlaying) {
             triggerShuffleSongs()
             return
