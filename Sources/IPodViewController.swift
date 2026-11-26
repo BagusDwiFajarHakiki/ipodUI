@@ -723,16 +723,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func playTrack(at index: Int, transitionDirection: Int = 0) {
         guard currentQueue.indices.contains(index) else { return }
         let track = currentQueue[index]
-        guard let url = track.assetURL else { return }
 
         if let obs = endObserver {
             NotificationCenter.default.removeObserver(obs)
             endObserver = nil
         }
 
-        let item = AVPlayerItem(url: url)
-        player = AVPlayer(playerItem: item)
-        player?.play()
         isPlaying = true
         playingTrackArtwork = track.artworkImage
         screenView.updatePlayState(isPlaying: true)
@@ -748,16 +744,27 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             )
         }
 
-        endObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: item,
-            queue: .main
-        ) { [weak self] _ in
-            self?.playNextTrack()
-        }
+        IPodStreamingLibrary.shared.resolvePlayableAudioURL(for: track) { [weak self] resolvedURL in
+            guard let self = self, let url = resolvedURL ?? track.assetURL else { return }
+            // Pastikan lagu yang diputar masih merupakan lagu aktif saat callback selesai
+            guard self.currentQueue.indices.contains(self.currentTrackIndex),
+                  self.currentQueue[self.currentTrackIndex].id == track.id else { return }
 
-        startProgressTimer()
-        updateNowPlayingInfo(track: track, elapsed: 0)
+            let item = AVPlayerItem(url: url)
+            self.player = AVPlayer(playerItem: item)
+            self.player?.play()
+
+            self.endObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                self?.playNextTrack()
+            }
+
+            self.startProgressTimer()
+            self.updateNowPlayingInfo(track: track, elapsed: 0)
+        }
     }
 
     private func seekToRatio(_ ratio: Double, isFinished: Bool) {
