@@ -746,26 +746,48 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             )
         }
 
-        IPodStreamingLibrary.shared.resolvePlayableAudioURL(for: track) { [weak self] resolvedURL in
-            guard let self = self, let url = resolvedURL else { return }
-            guard self.currentQueue.indices.contains(self.currentTrackIndex),
-                  self.currentQueue[self.currentTrackIndex].id == track.id else { return }
+        if track.id.hasPrefix("innertube_") {
+            IPodStreamingLibrary.shared.resolvePlayableAudio(for: track) { [weak self] result in
+                guard let self = self else { return }
+                guard self.currentQueue.indices.contains(self.currentTrackIndex),
+                      self.currentQueue[self.currentTrackIndex].id == track.id else { return }
 
-            let item = AVPlayerItem(url: url)
-            self.player = AVPlayer(playerItem: item)
-            self.player?.play()
-
-            self.endObserver = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemDidPlayToEndTime,
-                object: item,
-                queue: .main
-            ) { [weak self] _ in
-                self?.playNextTrack()
+                switch result {
+                case .playable(let url):
+                    self.startAVPlayer(with: url, track: track)
+                case .failed(let reason):
+                    self.isPlaying = false
+                    self.screenView.updatePlayState(isPlaying: false)
+                    self.screenView.showStatusBanner("Gagal Putar: \(reason)")
+                }
             }
-
-            self.startProgressTimer()
-            self.updateNowPlayingInfo(track: track, elapsed: 0)
+            return
         }
+
+        if let url = track.assetURL {
+            startAVPlayer(with: url, track: track)
+        } else {
+            isPlaying = false
+            screenView.updatePlayState(isPlaying: false)
+            screenView.showStatusBanner("Gagal Putar: Asset URL kosong")
+        }
+    }
+
+    private func startAVPlayer(with url: URL, track: IPodTrack) {
+        let item = AVPlayerItem(url: url)
+        player = AVPlayer(playerItem: item)
+        player?.play()
+
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            self?.playNextTrack()
+        }
+
+        startProgressTimer()
+        updateNowPlayingInfo(track: track, elapsed: 0)
     }
 
     private func seekToRatio(_ ratio: Double, isFinished: Bool) {

@@ -277,6 +277,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private var batteryWidthConstraint: NSLayoutConstraint!
     private var clockTimer: Timer?
 
+    // Banner Status Error
+    private let statusBannerLabel = UILabel()
+    private var statusBannerTimer: Timer?
+
     // Menu List View
     private let tableView = UITableView()
     private var rows: [IPodMenuRow] = []
@@ -361,7 +365,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         refreshButton.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(refreshButton)
 
-        // Ikon baterai dengan bar pengisian + persentase di dalamnya
         batteryView.layer.borderWidth = 1.2
         batteryView.layer.cornerRadius = 3.5
         batteryView.clipsToBounds = true
@@ -516,6 +519,17 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         progressKnob.translatesAutoresizingMaskIntoConstraints = false
         progressTouchArea.addSubview(progressKnob)
 
+        statusBannerLabel.font = UIFont.systemFont(ofSize: 10.5, weight: .bold)
+        statusBannerLabel.textColor = .white
+        statusBannerLabel.backgroundColor = UIColor(red: 0.78, green: 0.16, blue: 0.16, alpha: 0.92)
+        statusBannerLabel.textAlignment = .center
+        statusBannerLabel.layer.cornerRadius = 5
+        statusBannerLabel.clipsToBounds = true
+        statusBannerLabel.numberOfLines = 2
+        statusBannerLabel.alpha = 0.0
+        statusBannerLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(statusBannerLabel)
+
         UIDevice.current.isBatteryMonitoringEnabled = true
         let level = UIDevice.current.batteryLevel
         let pctInt = level >= 0 ? Int(round(level * 100.0)) : 85
@@ -640,8 +654,27 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             progressKnob.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             progressKnob.centerXAnchor.constraint(equalTo: progressFill.trailingAnchor),
             progressKnob.widthAnchor.constraint(equalToConstant: 10),
-            progressKnob.heightAnchor.constraint(equalToConstant: 10)
+            progressKnob.heightAnchor.constraint(equalToConstant: 10),
+
+            statusBannerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            statusBannerLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            statusBannerLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         ])
+    }
+
+    func showStatusBanner(_ message: String) {
+        statusBannerTimer?.invalidate()
+        DispatchQueue.main.async {
+            self.statusBannerLabel.text = message
+            UIView.animate(withDuration: 0.2) {
+                self.statusBannerLabel.alpha = 1.0
+            }
+            self.statusBannerTimer = Timer.scheduledTimer(withTimeInterval: 3.5, repeats: false) { [weak self] _ in
+                UIView.animate(withDuration: 0.25) {
+                    self?.statusBannerLabel.alpha = 0.0
+                }
+            }
+        }
     }
 
     @objc private func didTapRefreshButton() {

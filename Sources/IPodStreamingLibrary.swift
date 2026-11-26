@@ -2,6 +2,11 @@ import Foundation
 import UIKit
 import MediaPlayer
 
+enum IPodStreamResolutionResult {
+    case playable(URL)
+    case failed(reason: String)
+}
+
 private enum MetroLite12Client {
     case iosMusic
     case webRemix
@@ -135,31 +140,34 @@ final class IPodStreamingLibrary {
         return [selectedTrack] + ordered
     }
 
-    func resolvePlayableAudioURL(for track: IPodTrack, completion: @escaping (URL?) -> Void) {
+    func resolvePlayableAudio(for track: IPodTrack, completion: @escaping (IPodStreamResolutionResult) -> Void) {
         if let cached = resolvedStreamURLCache[track.id] {
-            completion(cached)
+            completion(.playable(cached))
             return
         }
 
         guard let videoId = videoIdByTrackId[track.id], !videoId.isEmpty else {
-            completion(nil)
+            completion(.failed(reason: "Stream Error: Video ID kosong"))
             return
         }
 
         let clients: [MetroLite12Client] = [.iosMusic, .webRemix, .tvEmbedded]
-        resolvePlayerStream(videoId: videoId, clients: clients, index: 0) { [weak self] streamURL in
-            if let url = streamURL {
+        resolvePlayerStream(videoId: videoId, clients: clients, index: 0, lastErrorReason: "No Direct Audio URL") { [weak self] result in
+            switch result {
+            case .playable(let url):
                 self?.resolvedStreamURLCache[track.id] = url
-                DispatchQueue.main.async { completion(url) }
-                return
-            }
+                DispatchQueue.main.async { completion(.playable(url)) }
 
-            self?.resolveFromMobileWatchPage(videoId: videoId) { watchStreamURL in
-                if let wURL = watchStreamURL {
-                    self?.resolvedStreamURLCache[track.id] = wURL
-                }
-                DispatchQueue.main.async {
-                    completion(watchStreamURL)
+            case .failed(let playerReason):
+                self?.resolveFromMobileWatchPage(videoId: videoId) { watchResult in
+                    switch watchResult {
+                    case .playable(let wURL):
+                        self?.resolvedStreamURLCache[track.id] = wURL
+                        DispatchQueue.main.async { completion(.playable(wURL)) }
+                    case .failed(let watchReason):
+                        let combinedReason = "\(playerReason) | \(watchReason)"
+                        DispatchQueue.main.async { completion(.failed(reason: combinedReason)) }
+                    }
                 }
             }
         }
@@ -406,15 +414,16 @@ final class IPodStreamingLibrary {
         videoId: String,
         clients: [MetroLite12Client],
         index: Int,
-        completion: @escaping (URL?) -> Void
+        lastErrorReason: String,
+        completion: @escaping (IPodStreamResolutionResult) -> Void
     ) {
         guard clients.indices.contains(index) else {
-            completion(nil)
+            completion(.failed(reason: lastErrorReason))
             return
         }
         let client = clients[index]
         guard let endpoint = URL(string: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false") else {
-            completion(nil)
+            completion(.failed(reason: "Invalid Player Endpoint"))
             return
         }
 
@@ -441,12 +450,37 @@ final class IPodStreamingLibrary {
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
-            guard let data = data,
-                  error == nil,
-                  let http = response as? HTTPURLResponse,
-                  http.statusCode == 200,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                self.resolvePlayerStream(videoId: videoId, clients: clients, index: index + 1, completion: completion)
+            if let netErr = error {
+                self.resolvePlayerStream(
+                    videoId: videoId,
+                    clients: clients,
+                    index: index + 1,
+                    lastErrorReason: "Net: \(netErr.localizedDescription)",
+                    completion: completion
+                )
+                return
+            }
+
+            let httpCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard let data = data, httpCode == 200 else {
+                self.resolvePlayerStream(
+                    videoId: videoId,
+                    clients: clients,
+                    index: index + 1,
+                    lastErrorReason: "HTTP \(httpCode) (\(client.clientName))",
+                    completion: completion
+                )
+                return
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                self.resolvePlayerStream(
+                    videoId: videoId,
+                    clients: clients,
+                    index: index + 1,
+                    lastErrorReason: "Invalid JSON (\(client.clientName))",
+                    completion: completion
+                )
                 return
             }
 
@@ -454,21 +488,38 @@ final class IPodStreamingLibrary {
                let status = statusObj["status"] as? String {
                 let upper = status.uppercased()
                 if upper.contains("LOGIN_REQUIRED") || upper.contains("ERROR") || upper.contains("UNPLAYABLE") {
-                    self.resolvePlayerStream(videoId: videoId, clients: clients, index: index + 1, completion: completion)
+                    let reasonDetail = statusObj["reason"] as? String ?? status
+                    self.resolvePlayerStream(
+                        videoId: videoId,
+                        clients: clients,
+                        index: index + 1,
+                        lastErrorReason: "\(status): \(reasonDetail)",
+                        completion: completion
+                    )
                     return
                 }
             }
 
-            if let streamURL = self.extractAudioStreamURL(from: json) {
-                completion(streamURL)
-            } else {
-                self.resolvePlayerStream(videoId: videoId, clients: clients, index: index + 1, completion: completion)
+            let extraction = self.extractAudioStreamURL(from: json)
+            switch extraction {
+            case .playable(let url):
+                completion(.playable(url))
+            case .failed(let reason):
+                self.resolvePlayerStream(
+                    videoId: videoId,
+                    clients: clients,
+                    index: index + 1,
+                    lastErrorReason: "\(client.clientName): \(reason)",
+                    completion: completion
+                )
             }
         }.resume()
     }
 
-    private func extractAudioStreamURL(from playerJSON: [String: Any]) -> URL? {
-        guard let streamingData = playerJSON["streamingData"] as? [String: Any] else { return nil }
+    private func extractAudioStreamURL(from playerJSON: [String: Any]) -> IPodStreamResolutionResult {
+        guard let streamingData = playerJSON["streamingData"] as? [String: Any] else {
+            return .failed(reason: "Missing streamingData")
+        }
         let adaptive = streamingData["adaptiveFormats"] as? [[String: Any]] ?? []
         let standard = streamingData["formats"] as? [[String: Any]] ?? []
 
@@ -483,24 +534,31 @@ final class IPodStreamingLibrary {
             return b1 > b2
         }
 
+        var sawCipheredAudio = false
         for fmt in sortedAudio {
             if let urlStr = fmt["url"] as? String, let url = URL(string: urlStr) {
-                return url
+                return .playable(url)
+            }
+            if fmt["signatureCipher"] != nil || fmt["cipher"] != nil {
+                sawCipheredAudio = true
             }
         }
 
         for fmt in standard {
             if let urlStr = fmt["url"] as? String, let url = URL(string: urlStr) {
-                return url
+                return .playable(url)
             }
         }
 
-        return nil
+        if sawCipheredAudio {
+            return .failed(reason: "Ciphered Stream (No Direct URL)")
+        }
+        return .failed(reason: "No Direct Audio URL")
     }
 
-    private func resolveFromMobileWatchPage(videoId: String, completion: @escaping (URL?) -> Void) {
+    private func resolveFromMobileWatchPage(videoId: String, completion: @escaping (IPodStreamResolutionResult) -> Void) {
         guard let url = URL(string: "https://m.youtube.com/watch?v=\(videoId)") else {
-            completion(nil)
+            completion(.failed(reason: "Watch URL Invalid"))
             return
         }
         var request = URLRequest(url: url)
@@ -510,9 +568,14 @@ final class IPodStreamingLibrary {
             forHTTPHeaderField: "User-Agent"
         )
 
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            guard let data = data, let html = String(data: data, encoding: .utf8) else {
-                completion(nil)
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let err = error {
+                completion(.failed(reason: "Watch Net: \(err.localizedDescription)"))
+                return
+            }
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard let data = data, code == 200, let html = String(data: data, encoding: .utf8) else {
+                completion(.failed(reason: "Watch HTTP \(code)"))
                 return
             }
             let pattern = #"https?://[^"\\\s]+mime=audio[^"\\\s]+"#
@@ -522,10 +585,12 @@ final class IPodStreamingLibrary {
                 let decoded = String(html[range])
                     .replacingOccurrences(of: "\\u0026", with: "&")
                     .replacingOccurrences(of: "\\/", with: "/")
-                completion(URL(string: decoded))
-                return
+                if let audioURL = URL(string: decoded) {
+                    completion(.playable(audioURL))
+                    return
+                }
             }
-            completion(nil)
+            completion(.failed(reason: "Watch Audio Not Found"))
         }.resume()
     }
 
