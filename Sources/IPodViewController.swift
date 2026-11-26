@@ -37,6 +37,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         setupRemoteCommands()
 
         clickWheel.delegate = self
+        screenView.onCoverFlowTrackSelected = { [weak self] index in
+            let songs = IPodMusicLibrary.shared.allTracks
+            if songs.indices.contains(index) {
+                self?.startQueue(tracks: songs, at: index)
+            }
+        }
         renderTopMenu(restoreIndex: 0)
 
         IPodMusicLibrary.shared.requestAccessAndLoad { [weak self] in
@@ -158,6 +164,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func renderTopMenu(restoreIndex: Int) {
         guard let top = menuStack.last else { return }
         isNowPlayingActive = false
+
+        if case .allSongs = top.node {
+            let songs = IPodMusicLibrary.shared.allTracks
+            screenView.showSongsCoverFlow(title: "Songs", tracks: songs, selectedIndex: restoreIndex)
+            return
+        }
+
         let content = rows(for: top.node)
         screenView.showMenu(title: content.title, items: content.items, selectedIndex: restoreIndex)
     }
@@ -173,7 +186,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     // MARK: - ClickWheelDelegate
     func clickWheelDidScroll(steps: Int) {
         if isNowPlayingActive {
-            // Putar roda saat di Now Playing untuk mengatur volume sistem
             if let slider = MPVolumeView().subviews.compactMap({ $0 as? UISlider }).first {
                 slider.value = min(max(0, slider.value + Float(steps) * 0.06), 1.0)
             }

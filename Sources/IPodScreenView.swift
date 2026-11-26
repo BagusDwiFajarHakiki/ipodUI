@@ -103,10 +103,70 @@ class IPodMenuCell: UITableViewCell {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
+// MARK: - Cover Flow Cell (Sampul Berjejer Kanan-Kiri + Refleksi Bawah)
+class IPodCoverFlowCell: UICollectionViewCell {
+    let coverImageView = UIImageView()
+    let reflectionImageView = UIImageView()
+    private let reflectionMask = CAGradientLayer()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        clipsToBounds = false
+
+        coverImageView.contentMode = .scaleAspectFill
+        coverImageView.clipsToBounds = true
+        coverImageView.layer.borderWidth = 1.0
+        coverImageView.layer.borderColor = UIColor(white: 0.72, alpha: 1.0).cgColor
+        coverImageView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(coverImageView)
+
+        reflectionImageView.contentMode = .scaleAspectFill
+        reflectionImageView.clipsToBounds = true
+        reflectionImageView.alpha = 0.28
+        reflectionImageView.transform = CGAffineTransform(scaleX: 1.0, y: -1.0)
+        reflectionImageView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(reflectionImageView)
+
+        reflectionMask.colors = [
+            UIColor.clear.cgColor,
+            UIColor.white.cgColor
+        ]
+        reflectionMask.locations = [0.45, 1.0]
+        reflectionImageView.layer.mask = reflectionMask
+
+        NSLayoutConstraint.activate([
+            coverImageView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 4),
+            coverImageView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            coverImageView.widthAnchor.constraint(equalToConstant: 96),
+            coverImageView.heightAnchor.constraint(equalToConstant: 96),
+
+            reflectionImageView.topAnchor.constraint(equalTo: coverImageView.bottomAnchor, constant: 2),
+            reflectionImageView.centerXAnchor.constraint(equalTo: coverImageView.centerXAnchor),
+            reflectionImageView.widthAnchor.constraint(equalToConstant: 96),
+            reflectionImageView.heightAnchor.constraint(equalToConstant: 26)
+        ])
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        reflectionMask.frame = reflectionImageView.bounds
+    }
+
+    func configure(image: UIImage?) {
+        coverImageView.image = image
+        reflectionImageView.image = image
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
     var theme: IPodColorTheme = .sepiaPod {
         didSet { applyTheme() }
     }
+
+    var onCoverFlowTrackSelected: ((Int) -> Void)?
 
     // Top Status Bar
     private let headerBar = UIView()
@@ -116,10 +176,18 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
     private let batteryView = UIView()
     private let batteryFill = UIView()
 
-    // Menu View
+    // Menu List View
     private let tableView = UITableView()
     private var rows: [IPodMenuRow] = []
     private(set) var selectedIndex: Int = 0
+
+    // Horizontal Cover Flow View (Menu Songs)
+    private let coverFlowContainer = UIView()
+    private var coverCollectionView: UICollectionView!
+    private let coverTitleLabel = UILabel()
+    private let coverArtistLabel = UILabel()
+    private var coverTracks: [IPodTrack] = []
+    private(set) var isCoverFlowActive = false
 
     // Now Playing View
     private let nowPlayingContainer = UIView()
@@ -160,7 +228,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
         playStateIcon.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(playStateIcon)
 
-        headerTitleLabel.text = "SepiaPod"
+        headerTitleLabel.text = "iPod"
         headerTitleLabel.font = UIFont.systemFont(ofSize: 13, weight: .bold)
         headerTitleLabel.textAlignment = .center
         headerTitleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -186,6 +254,38 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
         tableView.isUserInteractionEnabled = false
         tableView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(tableView)
+
+        // Cover Flow Container (Sampul berjejer kanan-kiri + judul di bawah)
+        coverFlowContainer.isHidden = true
+        coverFlowContainer.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(coverFlowContainer)
+
+        let flowLayout = UICollectionViewFlowLayout()
+        flowLayout.scrollDirection = .horizontal
+        flowLayout.minimumLineSpacing = 8
+        flowLayout.itemSize = CGSize(width: 102, height: 128)
+
+        coverCollectionView = UICollectionView(frame: .zero, collectionViewLayout: flowLayout)
+        coverCollectionView.dataSource = self
+        coverCollectionView.delegate = self
+        coverCollectionView.register(IPodCoverFlowCell.self, forCellWithReuseIdentifier: "CoverCell")
+        coverCollectionView.backgroundColor = .clear
+        coverCollectionView.showsHorizontalScrollIndicator = false
+        coverCollectionView.decelerationRate = .fast
+        coverCollectionView.translatesAutoresizingMaskIntoConstraints = false
+        coverFlowContainer.addSubview(coverCollectionView)
+
+        coverTitleLabel.font = UIFont.systemFont(ofSize: 13, weight: .bold)
+        coverTitleLabel.textAlignment = .center
+        coverTitleLabel.lineBreakMode = .byTruncatingTail
+        coverTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        coverFlowContainer.addSubview(coverTitleLabel)
+
+        coverArtistLabel.font = UIFont.systemFont(ofSize: 11, weight: .medium)
+        coverArtistLabel.textAlignment = .center
+        coverArtistLabel.lineBreakMode = .byTruncatingTail
+        coverArtistLabel.translatesAutoresizingMaskIntoConstraints = false
+        coverFlowContainer.addSubview(coverArtistLabel)
 
         // Now Playing Container
         nowPlayingContainer.isHidden = true
@@ -278,6 +378,24 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
             tableView.trailingAnchor.constraint(equalTo: trailingAnchor),
             tableView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
+            coverFlowContainer.topAnchor.constraint(equalTo: headerBar.bottomAnchor),
+            coverFlowContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            coverFlowContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
+            coverFlowContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            coverCollectionView.topAnchor.constraint(equalTo: coverFlowContainer.topAnchor, constant: 8),
+            coverCollectionView.leadingAnchor.constraint(equalTo: coverFlowContainer.leadingAnchor),
+            coverCollectionView.trailingAnchor.constraint(equalTo: coverFlowContainer.trailingAnchor),
+            coverCollectionView.heightAnchor.constraint(equalToConstant: 130),
+
+            coverTitleLabel.topAnchor.constraint(equalTo: coverCollectionView.bottomAnchor, constant: 2),
+            coverTitleLabel.leadingAnchor.constraint(equalTo: coverFlowContainer.leadingAnchor, constant: 14),
+            coverTitleLabel.trailingAnchor.constraint(equalTo: coverFlowContainer.trailingAnchor, constant: -14),
+
+            coverArtistLabel.topAnchor.constraint(equalTo: coverTitleLabel.bottomAnchor, constant: 2),
+            coverArtistLabel.leadingAnchor.constraint(equalTo: coverTitleLabel.leadingAnchor),
+            coverArtistLabel.trailingAnchor.constraint(equalTo: coverTitleLabel.trailingAnchor),
+
             nowPlayingContainer.topAnchor.constraint(equalTo: headerBar.bottomAnchor),
             nowPlayingContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
             nowPlayingContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -321,6 +439,15 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
         ])
     }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if let layout = coverCollectionView.collectionViewLayout as? UICollectionViewFlowLayout {
+            let sideInset = max(0, (bounds.width - layout.itemSize.width) / 2.0)
+            layout.sectionInset = UIEdgeInsets(top: 0, left: sideInset, bottom: 0, right: sideInset)
+        }
+        applyCoverFlowTransforms()
+    }
+
     private func applyTheme() {
         backgroundColor = theme.screenBackground
         headerBar.backgroundColor = theme == .sepiaPod
@@ -328,6 +455,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
             : UIColor(white: 0.90, alpha: 1.0)
         headerTitleLabel.textColor = theme.primaryText
         playStateIcon.textColor = theme.highlightBottom
+        coverTitleLabel.textColor = theme.primaryText
+        coverArtistLabel.textColor = theme.secondaryText
         trackIndexLabel.textColor = theme.secondaryText
         trackTitleLabel.textColor = theme.primaryText
         trackArtistLabel.textColor = theme.secondaryText
@@ -336,6 +465,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
         remainingLabel.textColor = theme.primaryText
         progressFill.backgroundColor = theme.highlightTop
         tableView.reloadData()
+        coverCollectionView.reloadData()
     }
 
     func updatePlayState(isPlaying: Bool) {
@@ -346,7 +476,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
         headerTitleLabel.text = title
         self.rows = items
         self.selectedIndex = min(max(0, selectedIndex), max(0, items.count - 1))
+        self.isCoverFlowActive = false
         nowPlayingContainer.isHidden = true
+        coverFlowContainer.isHidden = true
         tableView.isHidden = false
         tableView.reloadData()
         if !rows.isEmpty {
@@ -354,8 +486,46 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
         }
     }
 
+    func showSongsCoverFlow(title: String, tracks: [IPodTrack], selectedIndex: Int = 0) {
+        headerTitleLabel.text = title
+        self.coverTracks = tracks
+        self.selectedIndex = min(max(0, selectedIndex), max(0, tracks.count - 1))
+        self.isCoverFlowActive = true
+        nowPlayingContainer.isHidden = true
+        tableView.isHidden = true
+        coverFlowContainer.isHidden = false
+        layoutIfNeeded()
+        coverCollectionView.reloadData()
+
+        if !tracks.isEmpty {
+            let indexPath = IndexPath(item: self.selectedIndex, section: 0)
+            coverCollectionView.scrollToItem(at: indexPath, at: .centeredHorizontally, animated: false)
+            updateCoverFlowCaption(for: self.selectedIndex)
+            DispatchQueue.main.async {
+                self.applyCoverFlowTransforms()
+            }
+        } else {
+            coverTitleLabel.text = "Tidak ada lagu"
+            coverArtistLabel.text = "Sinkronkan lagu ke Music/Documents"
+        }
+    }
+
     func moveSelection(by delta: Int) {
-        guard nowPlayingContainer.isHidden, !rows.isEmpty else { return }
+        guard nowPlayingContainer.isHidden else { return }
+
+        if isCoverFlowActive {
+            guard !coverTracks.isEmpty else { return }
+            let next = min(max(0, selectedIndex + delta), coverTracks.count - 1)
+            if next != selectedIndex {
+                selectedIndex = next
+                let indexPath = IndexPath(item: selectedIndex, section: 0)
+                coverCollectionView.scrollToItem(at: indexPath, at: .centeredHorizontally, animated: true)
+                updateCoverFlowCaption(for: selectedIndex)
+            }
+            return
+        }
+
+        guard !rows.isEmpty else { return }
         let next = min(max(0, selectedIndex + delta), rows.count - 1)
         if next != selectedIndex {
             selectedIndex = next
@@ -364,9 +534,37 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
         }
     }
 
+    private func updateCoverFlowCaption(for index: Int) {
+        guard coverTracks.indices.contains(index) else { return }
+        let track = coverTracks[index]
+        coverTitleLabel.text = track.title
+        coverArtistLabel.text = track.artist
+    }
+
+    private func applyCoverFlowTransforms() {
+        guard isCoverFlowActive else { return }
+        let centerX = coverCollectionView.contentOffset.x + coverCollectionView.bounds.width / 2.0
+
+        for cell in coverCollectionView.visibleCells {
+            let distance = cell.center.x - centerX
+            let normalized = max(-1.0, min(1.0, distance / 110.0))
+
+            var transform = CATransform3DIdentity
+            transform.m34 = -1.0 / 450.0
+            let angle = -normalized * (.pi / 3.2) // Miring ke dalam menghadap tengah seperti Cover Flow
+            let scale = 1.0 - (abs(normalized) * 0.16)
+            transform = CATransform3DRotate(transform, angle, 0, 1, 0)
+            transform = CATransform3DScale(transform, scale, scale, 1.0)
+            cell.layer.transform = transform
+            cell.layer.zPosition = 100 - abs(distance)
+        }
+    }
+
     func showNowPlaying(track: IPodTrack, index: Int, total: Int) {
         headerTitleLabel.text = "Now Playing"
         tableView.isHidden = true
+        coverFlowContainer.isHidden = true
+        isCoverFlowActive = false
         nowPlayingContainer.isHidden = false
 
         trackIndexLabel.text = "\(index + 1) of \(total)"
@@ -392,12 +590,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
     }
 
     private func makeDefaultNoteArtwork() -> UIImage? {
-        let size = CGSize(width: 120, height: 120)
+        let size = CGSize(width: 140, height: 140)
         UIGraphicsBeginImageContextWithOptions(size, true, 0)
         theme.highlightTop.setFill()
         UIRectFill(CGRect(origin: .zero, size: size))
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: 48, weight: .bold),
+            .font: UIFont.systemFont(ofSize: 52, weight: .bold),
             .foregroundColor: UIColor.white
         ]
         let str = "♫"
@@ -417,5 +615,50 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate {
         let cell = tableView.dequeueReusableCell(withIdentifier: "IPodCell", for: indexPath) as! IPodMenuCell
         cell.configure(row: rows[indexPath.row], isSelected: indexPath.row == selectedIndex, theme: theme)
         return cell
+    }
+
+    // MARK: - UICollectionViewDataSource & Delegate (Cover Flow)
+    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+        return coverTracks.count
+    }
+
+    func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "CoverCell", for: indexPath) as! IPodCoverFlowCell
+        let track = coverTracks[indexPath.item]
+        cell.configure(image: track.artworkImage ?? makeDefaultNoteArtwork())
+        return cell
+    }
+
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        if indexPath.item == selectedIndex {
+            onCoverFlowTrackSelected?(indexPath.item)
+        } else {
+            selectedIndex = indexPath.item
+            collectionView.scrollToItem(at: indexPath, at: .centeredHorizontally, animated: true)
+            updateCoverFlowCaption(for: selectedIndex)
+        }
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView === coverCollectionView else { return }
+        applyCoverFlowTransforms()
+
+        let centerX = coverCollectionView.contentOffset.x + coverCollectionView.bounds.width / 2.0
+        var closestIndex = selectedIndex
+        var minDistance = CGFloat.greatestFiniteMagnitude
+
+        for cell in coverCollectionView.visibleCells {
+            if let idx = coverCollectionView.indexPath(for: cell)?.item {
+                let d = abs(cell.center.x - centerX)
+                if d < minDistance {
+                    minDistance = d
+                    closestIndex = idx
+                }
+            }
+        }
+        if closestIndex != selectedIndex {
+            selectedIndex = closestIndex
+            updateCoverFlowCaption(for: selectedIndex)
+        }
     }
 }
