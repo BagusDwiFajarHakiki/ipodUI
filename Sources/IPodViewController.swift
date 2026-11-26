@@ -26,7 +26,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var nowPlayingBarMode: IPodNowPlayingBarMode = .duration
     private var activeStreamingSearchQuery: String?
     private var sleepSetMinutes: Int = 0
-    private var sleepRemainingSeconds: Int = 0
+    private var sleepElapsedSeconds: Int = 0
     private var isSleepTimerActive: Bool = false
     private var sleepActivationTimer: Timer?
     private var sleepCountdownTimer: Timer?
@@ -876,7 +876,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 nowPlayingBarMode,
                 volume: currentSystemVolume(),
                 sleepSetMinutes: sleepSetMinutes,
-                sleepRemainingSeconds: sleepRemainingSeconds,
+                sleepElapsedSeconds: sleepElapsedSeconds,
                 isSleepActive: isSleepTimerActive
             )
             return
@@ -1083,7 +1083,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 .duration,
                 volume: currentSystemVolume(),
                 sleepSetMinutes: sleepSetMinutes,
-                sleepRemainingSeconds: sleepRemainingSeconds,
+                sleepElapsedSeconds: sleepElapsedSeconds,
                 isSleepActive: isSleepTimerActive
             )
         }
@@ -1344,10 +1344,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         isSleepTimerActive = false
 
         sleepSetMinutes = min(max(0, minutes), 60)
-        sleepRemainingSeconds = sleepSetMinutes * 60
+        sleepElapsedSeconds = 0
         screenView.updateSleepTimerDisplay(
             setMinutes: sleepSetMinutes,
-            remainingSeconds: sleepRemainingSeconds,
+            elapsedSeconds: 0,
             isActive: false
         )
 
@@ -1363,28 +1363,30 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         guard sleepSetMinutes >= 1 else { return }
 
         isSleepTimerActive = true
-        sleepRemainingSeconds = sleepSetMinutes * 60
+        sleepElapsedSeconds = 0
         screenView.updateSleepTimerDisplay(
             setMinutes: sleepSetMinutes,
-            remainingSeconds: sleepRemainingSeconds,
+            elapsedSeconds: 0,
             isActive: true
         )
 
         sleepCountdownTimer?.invalidate()
         sleepCountdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            self.sleepRemainingSeconds = max(0, self.sleepRemainingSeconds - 1)
+            let targetSeconds = self.sleepSetMinutes * 60
+            self.sleepElapsedSeconds = min(targetSeconds, self.sleepElapsedSeconds + 1)
             self.screenView.updateSleepTimerDisplay(
                 setMinutes: self.sleepSetMinutes,
-                remainingSeconds: self.sleepRemainingSeconds,
-                isActive: self.sleepRemainingSeconds > 0
+                elapsedSeconds: self.sleepElapsedSeconds,
+                isActive: true
             )
-            if self.sleepRemainingSeconds <= 0 {
+            if self.sleepElapsedSeconds >= targetSeconds {
                 self.sleepCountdownTimer?.invalidate()
                 self.sleepCountdownTimer = nil
                 self.isSleepTimerActive = false
                 self.sleepSetMinutes = 0
-                self.screenView.updateSleepTimerDisplay(setMinutes: 0, remainingSeconds: 0, isActive: false)
+                self.sleepElapsedSeconds = 0
+                self.screenView.updateSleepTimerDisplay(setMinutes: 0, elapsedSeconds: 0, isActive: false)
                 if self.isPlaying {
                     self.togglePlayPause()
                 }

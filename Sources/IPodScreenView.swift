@@ -370,7 +370,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private var lastDuration: TimeInterval = 1
     private var currentVolumeLevel: Float = 0.5
     private var lastSleepSetMinutes: Int = 0
-    private var lastSleepRemainingSeconds: Int = 0
+    private var lastSleepElapsedSeconds: Int = 0
     private var lastSleepActive: Bool = false
     private var lastDisplayedTrackId: String?
 
@@ -579,8 +579,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         timerEmptyIconView.translatesAutoresizingMaskIntoConstraints = false
         sleepLeftStack.addArrangedSubview(timerEmptyIconView)
 
-        sleepCountdownLabel.text = "0:00"
+        sleepCountdownLabel.text = "00:00"
         sleepCountdownLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
+        sleepCountdownLabel.textAlignment = .left
         sleepCountdownLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         sleepLeftStack.addArrangedSubview(sleepCountdownLabel)
 
@@ -592,8 +593,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         nowPlayingContainer.addSubview(sleepRightStack)
 
         sleepTargetLabel.text = "OFF"
-        sleepTargetLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
-        sleepTargetLabel.textAlignment = .right
+        sleepTargetLabel.font = UIFont.systemFont(ofSize: 11.5, weight: .bold)
+        sleepTargetLabel.textAlignment = .center
         sleepTargetLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         sleepRightStack.addArrangedSubview(sleepTargetLabel)
 
@@ -757,8 +758,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             timerEmptyIconView.widthAnchor.constraint(equalToConstant: 11),
             timerEmptyIconView.heightAnchor.constraint(equalToConstant: 13),
 
+            sleepCountdownLabel.widthAnchor.constraint(equalToConstant: 35),
+
             timerFullIconView.widthAnchor.constraint(equalToConstant: 11),
             timerFullIconView.heightAnchor.constraint(equalToConstant: 13),
+
+            sleepTargetLabel.widthAnchor.constraint(equalToConstant: 35),
 
             sleepLeftStack.trailingAnchor.constraint(equalTo: progressTouchArea.leadingAnchor, constant: -8),
             sleepLeftStack.leadingAnchor.constraint(greaterThanOrEqualTo: nowPlayingContainer.leadingAnchor, constant: 8),
@@ -1332,7 +1337,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         _ mode: IPodNowPlayingBarMode,
         volume: Float,
         sleepSetMinutes: Int,
-        sleepRemainingSeconds: Int,
+        sleepElapsedSeconds: Int,
         isSleepActive: Bool
     ) {
         barMode = mode
@@ -1351,7 +1356,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         case .sleepTimer:
             updateSleepTimerDisplay(
                 setMinutes: sleepSetMinutes,
-                remainingSeconds: sleepRemainingSeconds,
+                elapsedSeconds: sleepElapsedSeconds,
                 isActive: isSleepActive
             )
         }
@@ -1364,25 +1369,74 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         progressWidthConstraint.constant = progressTrack.bounds.width * CGFloat(currentVolumeLevel)
     }
 
-    func updateSleepTimerDisplay(setMinutes: Int, remainingSeconds: Int, isActive: Bool) {
+    func updateSleepTimerDisplay(setMinutes: Int, elapsedSeconds: Int, isActive: Bool) {
+        let wasActive = lastSleepActive
         lastSleepSetMinutes = setMinutes
-        lastSleepRemainingSeconds = remainingSeconds
+        lastSleepElapsedSeconds = elapsedSeconds
         lastSleepActive = isActive
 
-        sleepCountdownLabel.text = formatTime(TimeInterval(max(0, remainingSeconds)))
-        sleepTargetLabel.text = setMinutes > 0 ? formatTime(TimeInterval(setMinutes * 60)) : "OFF"
+        let displayElapsed = isActive ? max(0, elapsedSeconds) : 0
+        sleepCountdownLabel.text = formatSleepTime(TimeInterval(displayElapsed))
         updateSleepTimerColors()
+        if setMinutes > 0 {
+            sleepTargetLabel.attributedText = nil
+            sleepTargetLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
+            sleepTargetLabel.textAlignment = .right
+            sleepTargetLabel.text = formatSleepTime(TimeInterval(setMinutes * 60))
+        } else {
+            sleepTargetLabel.text = nil
+            sleepTargetLabel.textAlignment = .center
+            sleepTargetLabel.attributedText = NSAttributedString(
+                string: "OFF",
+                attributes: [
+                    .font: UIFont.systemFont(ofSize: 11.5, weight: .bold),
+                    .kern: 1.8,
+                    .foregroundColor: theme.secondaryText
+                ]
+            )
+        }
 
         guard barMode == .sleepTimer, !isScrubbing else { return }
         layoutIfNeeded()
-        let ratio = CGFloat(min(max(Double(remainingSeconds) / 3600.0, 0.0), 1.0))
-        progressWidthConstraint.constant = progressTrack.bounds.width * ratio
+        let ratio: CGFloat
+        if isActive && setMinutes > 0 {
+            let totalSec = Double(setMinutes * 60)
+            ratio = CGFloat(min(max(Double(displayElapsed) / totalSec, 0.0), 1.0))
+        } else {
+            ratio = CGFloat(min(max(Double(setMinutes) / 60.0, 0.0), 1.0))
+        }
+        let targetWidth = progressTrack.bounds.width * ratio
+        if !wasActive && isActive && displayElapsed == 0 {
+            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut]) {
+                self.progressWidthConstraint.constant = targetWidth
+                self.progressTouchArea.layoutIfNeeded()
+            }
+        } else {
+            progressWidthConstraint.constant = targetWidth
+        }
     }
 
     private func updateSleepTimerColors() {
         let activeColor = lastSleepActive ? theme.highlightTop : (lastSleepSetMinutes > 0 ? theme.primaryText : theme.secondaryText)
         sleepTargetLabel.textColor = activeColor
         timerFullIconView.tintColor = activeColor
+        if lastSleepSetMinutes == 0 {
+            sleepTargetLabel.attributedText = NSAttributedString(
+                string: "OFF",
+                attributes: [
+                    .font: UIFont.systemFont(ofSize: 11.5, weight: .bold),
+                    .kern: 1.8,
+                    .foregroundColor: activeColor
+                ]
+            )
+        }
+    }
+
+    private func formatSleepTime(_ sec: TimeInterval) -> String {
+        let total = Int(sec)
+        let m = total / 60
+        let s = total % 60
+        return String(format: "%02d:%02d", m, s)
     }
 
     func updateProgress(elapsed: TimeInterval, duration: TimeInterval, fromScrub: Bool = false) {
