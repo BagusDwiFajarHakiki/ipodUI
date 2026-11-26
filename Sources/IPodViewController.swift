@@ -785,11 +785,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         if track.id.hasPrefix("innertube_") {
-            let preferAndroid = isWatchdogRetry && didTryAndroidFallbackForCurrentTrack
+            let preferAlternate = isWatchdogRetry && didTryAndroidFallbackForCurrentTrack
             IPodStreamingLibrary.shared.resolvePlayableAudio(
                 for: track,
                 forceRefresh: isWatchdogRetry,
-                preferAndroidFallback: preferAndroid
+                preferAlternateClient: preferAlternate
             ) { [weak self] result in
                 guard let self = self else { return }
                 guard self.currentQueue.indices.contains(self.currentTrackIndex),
@@ -843,8 +843,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
         }
         let item = AVPlayerItem(asset: asset)
+        if !url.isFileURL {
+            item.preferredForwardBufferDuration = 20.0
+        }
 
-        player = AVPlayer(playerItem: item)
+        let avPlayer = AVPlayer(playerItem: item)
+        avPlayer.automaticallyWaitsToMinimizeStalling = true
+        player = avPlayer
         if resumeFromSeconds > 1.0 {
             let seekTarget = CMTime(seconds: resumeFromSeconds, preferredTimescale: 600)
             player?.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
@@ -887,7 +892,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             object: item,
             queue: .main
         ) { [weak self] _ in
-            self?.triggerWatchdogRecovery(for: track, item: item)
+            guard let self = self, self.isPlaying else { return }
+            // Give AVPlayer a chance to buffer & resume smoothly instead of tearing it down immediately
+            if self.player?.rate == 0 && item.isPlaybackLikelyToKeepUp {
+                self.player?.play()
+            }
         }
 
         failedEndObserver = NotificationCenter.default.addObserver(
@@ -1033,14 +1042,17 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 self.updateNowPlayingInfo(track: track, elapsed: elapsed)
 
                 if self.isPlaying && player.rate == 0 {
+                    if item.status == .readyToPlay && item.isPlaybackLikelyToKeepUp {
+                        player.play()
+                    }
                     if elapsed <= 5.0 {
                         self.startupStuckTicks += 1
-                        if self.startupStuckTicks >= 12 {
+                        if self.startupStuckTicks >= 16 {
                             self.triggerWatchdogRecovery(for: track, item: item)
                         }
                     } else if abs(elapsed - self.lastObservedElapsed) < 0.25 {
                         self.stuckTicks += 1
-                        if self.stuckTicks >= 5 {
+                        if self.stuckTicks >= 10 {
                             self.triggerWatchdogRecovery(for: track, item: item)
                         }
                     } else {

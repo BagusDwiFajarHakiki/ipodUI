@@ -198,8 +198,8 @@ final class IPodStreamingLibrary {
         return [selectedTrack] + ordered
     }
 
-    func resolvePlayableAudio(for track: IPodTrack, forceRefresh: Bool = false, preferAndroidFallback: Bool = false, completion: @escaping (IPodStreamResolutionResult) -> Void) {
-        if !forceRefresh && !preferAndroidFallback, let cached = resolvedStreamCache[track.id] {
+    func resolvePlayableAudio(for track: IPodTrack, forceRefresh: Bool = false, preferAlternateClient: Bool = false, completion: @escaping (IPodStreamResolutionResult) -> Void) {
+        if !forceRefresh && !preferAlternateClient, let cached = resolvedStreamCache[track.id] {
             completion(.playable(cached))
             return
         }
@@ -209,9 +209,9 @@ final class IPodStreamingLibrary {
             return
         }
 
-        let clients: [InnerTubeClient] = preferAndroidFallback
-            ? [.android, .ios, .iosMusic]
-            : [.ios, .android, .iosMusic]
+        let clients: [InnerTubeClient] = preferAlternateClient
+            ? [.ios, .android, .iosMusic]
+            : [.android, .ios, .iosMusic]
         resolvePlayerStream(videoId: videoId, clients: clients, index: 0, lastErrorReason: "No Direct Audio URL") { [weak self] result in
             switch result {
             case .playable(let stream):
@@ -579,16 +579,6 @@ final class IPodStreamingLibrary {
         let adaptive = streamingData["adaptiveFormats"] as? [[String: Any]] ?? []
         let standard = streamingData["formats"] as? [[String: Any]] ?? []
 
-        // AVPlayer on iOS supports AAC in MP4 (audio/mp4) and HLS; WebM/Opus fails to decode.
-        let mp4AudioFormats = adaptive.filter { fmt in
-            let mime = (fmt["mimeType"] as? String ?? "").lowercased()
-            return mime.contains("audio/mp4") && (fmt["url"] as? String)?.isEmpty == false
-        }.sorted {
-            let b1 = $0["bitrate"] as? Int ?? 0
-            let b2 = $1["bitrate"] as? Int ?? 0
-            return b1 > b2
-        }
-
         var candidates: [(url: URL, userAgent: String)] = []
         var seenURLs = Set<String>()
 
@@ -598,7 +588,24 @@ final class IPodStreamingLibrary {
             candidates.append((url: u, userAgent: client.userAgent))
         }
 
-        for fmt in mp4AudioFormats {
+        // 1. Prefer HLS manifest or progressive MP4 (e.g. itag 18) first:
+        //    YouTube caps adaptiveFormats (itag 140/139) at 1 MB (~59s) with HTTP 403 without a PO Token,
+        //    whereas progressive MP4 (formats) and HLS stream continuously for the full track.
+        if let hlsStr = streamingData["hlsManifestUrl"] as? String {
+            appendCandidate(hlsStr)
+        }
+
+        let mp4Standard = standard.filter { fmt in
+            let mime = (fmt["mimeType"] as? String ?? "").lowercased()
+            return (mime.contains("video/mp4") || mime.contains("audio/mp4"))
+                && (fmt["url"] as? String)?.isEmpty == false
+        }.sorted {
+            // Prefer smaller progressive MP4 (e.g. itag 18 / 360p) for faster audio buffering
+            let b1 = $0["bitrate"] as? Int ?? Int.max
+            let b2 = $1["bitrate"] as? Int ?? Int.max
+            return b1 < b2
+        }
+        for fmt in mp4Standard {
             appendCandidate(fmt["url"] as? String)
             if durationSec == nil,
                let msStr = fmt["approxDurationMs"] as? String,
@@ -607,16 +614,22 @@ final class IPodStreamingLibrary {
             }
         }
 
-        if let hlsStr = streamingData["hlsManifestUrl"] as? String {
-            appendCandidate(hlsStr)
-        }
-
-        let mp4Standard = standard.filter { fmt in
+        // 2. Fallback to adaptive audio/mp4 (AAC) only if progressive/HLS is unavailable
+        let mp4AudioFormats = adaptive.filter { fmt in
             let mime = (fmt["mimeType"] as? String ?? "").lowercased()
-            return mime.contains("video/mp4") || mime.contains("audio/mp4")
+            return mime.contains("audio/mp4") && (fmt["url"] as? String)?.isEmpty == false
+        }.sorted {
+            let b1 = $0["bitrate"] as? Int ?? 0
+            let b2 = $1["bitrate"] as? Int ?? 0
+            return b1 > b2
         }
-        for fmt in mp4Standard {
+        for fmt in mp4AudioFormats {
             appendCandidate(fmt["url"] as? String)
+            if durationSec == nil,
+               let msStr = fmt["approxDurationMs"] as? String,
+               let ms = Double(msStr), ms > 0 {
+                durationSec = ms / 1000.0
+            }
         }
 
         guard let primary = candidates.first else {
