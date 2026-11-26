@@ -591,7 +591,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         sleepRightStack.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(sleepRightStack)
 
-        sleepTargetLabel.text = "off"
+        sleepTargetLabel.text = "OFF"
         sleepTargetLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
         sleepTargetLabel.textAlignment = .right
         sleepTargetLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -1370,7 +1370,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lastSleepActive = isActive
 
         sleepCountdownLabel.text = formatTime(TimeInterval(max(0, remainingSeconds)))
-        sleepTargetLabel.text = setMinutes > 0 ? formatTime(TimeInterval(setMinutes * 60)) : "off"
+        sleepTargetLabel.text = setMinutes > 0 ? formatTime(TimeInterval(setMinutes * 60)) : "OFF"
         updateSleepTimerColors()
 
         guard barMode == .sleepTimer, !isScrubbing else { return }
