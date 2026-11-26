@@ -74,18 +74,18 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         let guide = view.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
-            screenView.topAnchor.constraint(equalTo: guide.topAnchor, constant: 14),
-            screenView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.76),
+            screenView.topAnchor.constraint(equalTo: guide.topAnchor, constant: 12),
+            screenView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
+            screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
+            screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.88),
 
-            clickWheel.topAnchor.constraint(equalTo: screenView.bottomAnchor, constant: 24),
+            clickWheel.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -22),
             clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.72),
+            clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.68),
             clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor)
         ])
     }
-
+    
     private func setupAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
