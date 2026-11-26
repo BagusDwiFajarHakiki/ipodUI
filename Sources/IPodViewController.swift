@@ -20,8 +20,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private var menuStack: [(node: IPodMenuNode, selectedIndex: Int)] = [(.root, 0)]
     private var isNowPlayingActive = false
-    private var isNowPlayingVolumeMode = false
+    private var nowPlayingBarMode: IPodNowPlayingBarMode = .duration
     private var activeStreamingSearchQuery: String?
+    private var sleepSetMinutes: Int = 0
+    private var sleepRemainingSeconds: Int = 0
+    private var isSleepTimerActive: Bool = false
+    private var sleepActivationTimer: Timer?
+    private var sleepCountdownTimer: Timer?
     private var isPlaylistsMenuEnabled: Bool = true
     private var isAmbientGlowEnabled: Bool = true
     private var currentGlowColor = UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
@@ -90,10 +95,14 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         screenView.onSeekRatioChanged = { [weak self] ratio, isFinished in
             guard let self = self else { return }
-            if self.isNowPlayingVolumeMode {
-                self.setSystemVolume(Float(ratio))
-            } else {
+            switch self.nowPlayingBarMode {
+            case .duration:
                 self.seekToRatio(ratio, isFinished: isFinished)
+            case .volume:
+                self.setSystemVolume(Float(ratio))
+            case .sleepTimer:
+                let mins = Int(round(min(max(ratio, 0.0), 1.0) * 60.0))
+                self.setSleepTimerMinutes(mins, startActivationCountdown: isFinished)
             }
         }
 
@@ -249,42 +258,40 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        // 1. Bright-to-soft Gaussian halo around all 4 sides of the LCD so the LCD perimeter
-        //    stands out cleanly from its own backlight without filling all the way to the screen edges.
-        let haloPath = UIBezierPath(roundedRect: lcdRect.insetBy(dx: 2.0, dy: 2.0), cornerRadius: 8.0)
+        // 1. Bright-to-soft Gaussian halo around all 4 sides of the LCD (full-alpha fill so setShadow renders at true opacity)
+        let haloPath = UIBezierPath(roundedRect: lcdRect.insetBy(dx: 1.0, dy: 1.0), cornerRadius: 8.0)
 
         ctx.saveGState()
-        ctx.setShadow(offset: .zero, blur: 9.0, color: UIColor.white.withAlphaComponent(0.55).cgColor)
-        UIColor.white.withAlphaComponent(0.10).setFill()
+        ctx.setShadow(offset: .zero, blur: 12.0, color: UIColor.white.withAlphaComponent(0.75).cgColor)
+        UIColor.white.setFill()
         haloPath.fill()
         ctx.restoreGState()
 
         ctx.saveGState()
-        ctx.setShadow(offset: .zero, blur: 15.0, color: UIColor.white.withAlphaComponent(0.36).cgColor)
-        UIColor.white.withAlphaComponent(0.05).setFill()
+        ctx.setShadow(offset: .zero, blur: 22.0, color: UIColor.white.withAlphaComponent(0.45).cgColor)
+        UIColor.white.setFill()
         haloPath.fill()
         ctx.restoreGState()
 
-        // 2. Soft bloom emerging below the LCD and widening smoothly toward the scroll wheel
-        //    while fading out before reaching the outer edges of the display.
+        // 2. Wide soft bloom emerging below the LCD and widening smoothly down around the scroll wheel
         let upperCenterY = lcdRect.maxY - lcdRect.height * 0.04
-        let upperReachY = max(135.0, (wheelRect.midY - upperCenterY) + 24.0)
+        let upperReachY = max(145.0, (wheelRect.midY - upperCenterY) + 30.0)
         drawEllipticalGlow(
             in: ctx,
             center: CGPoint(x: lcdRect.midX, y: upperCenterY),
-            rx: lcdRect.width * 0.52,
+            rx: w * 0.68,
             ry: upperReachY,
-            peakAlpha: 0.24
+            peakAlpha: 0.34
         )
 
-        let lowerCenterY = (lcdRect.maxY + wheelRect.midY) * 0.52
-        let lowerReachY = max(160.0, (wheelRect.maxY + 12.0) - lowerCenterY)
+        let lowerCenterY = (lcdRect.maxY + wheelRect.midY) * 0.54
+        let lowerReachY = max(175.0, (wheelRect.maxY + 20.0) - lowerCenterY)
         drawEllipticalGlow(
             in: ctx,
             center: CGPoint(x: wheelRect.midX, y: lowerCenterY),
-            rx: w * 0.54,
+            rx: w * 0.78,
             ry: lowerReachY,
-            peakAlpha: 0.22
+            peakAlpha: 0.28
         )
 
         let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
@@ -383,7 +390,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             UIApplication.shared.beginReceivingRemoteControlEvents()
             volumeObserver = session.observe(\.outputVolume, options: [.new]) { [weak self] _, change in
                 DispatchQueue.main.async {
-                    guard let self = self, self.isNowPlayingActive, self.isNowPlayingVolumeMode,
+                    guard let self = self, self.isNowPlayingActive, self.nowPlayingBarMode == .volume,
                           let vol = change.newValue else { return }
                     self.screenView.updateVolumeDisplay(vol)
                 }
@@ -565,6 +572,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             return ("iPod", [
                 IPodMenuRow(title: "Music", hasSubmenu: true),
                 IPodMenuRow(title: "Streaming", hasSubmenu: true),
+                IPodMenuRow(title: "Now Playing", hasSubmenu: true),
                 IPodMenuRow(title: "Settings", hasSubmenu: true)
             ])
 
@@ -759,10 +767,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     // MARK: - ClickWheelDelegate
     func clickWheelDidScroll(steps: Int) {
         if isNowPlayingActive {
-            if isNowPlayingVolumeMode {
-                setSystemVolume(currentSystemVolume() + Float(steps) * 0.06)
-            } else {
+            switch nowPlayingBarMode {
+            case .duration:
                 seekBy(seconds: Double(steps) * 5.0)
+            case .volume:
+                setSystemVolume(currentSystemVolume() + Float(steps) * 0.06)
+            case .sleepTimer:
+                adjustSleepTimer(byMinutes: steps)
             }
             return
         }
@@ -802,8 +813,21 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     func clickWheelDidPressSelect() {
         if isNowPlayingActive {
-            isNowPlayingVolumeMode.toggle()
-            screenView.setVolumeBarMode(isNowPlayingVolumeMode, volume: currentSystemVolume())
+            switch nowPlayingBarMode {
+            case .duration:
+                nowPlayingBarMode = .volume
+            case .volume:
+                nowPlayingBarMode = .sleepTimer
+            case .sleepTimer:
+                nowPlayingBarMode = .duration
+            }
+            screenView.setNowPlayingBarMode(
+                nowPlayingBarMode,
+                volume: currentSystemVolume(),
+                sleepSetMinutes: sleepSetMinutes,
+                sleepRemainingSeconds: sleepRemainingSeconds,
+                isSleepActive: isSleepTimerActive
+            )
             return
         }
         guard let top = menuStack.last else { return }
@@ -820,6 +844,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             } else if idx == 1 {
                 pushMenu(.streamingSongs(pageIndex: 0))
             } else if idx == 2 {
+                if !currentQueue.isEmpty && currentQueue.indices.contains(currentTrackIndex) {
+                    openNowPlayingScreen(animateFromCoverFlow: false)
+                } else {
+                    screenView.showStatusBanner("Belum ada lagu yang diputar")
+                }
+            } else if idx == 3 {
                 pushMenu(.settings)
             }
 
@@ -994,8 +1024,14 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         let wasAlreadyNowPlaying = isNowPlayingActive
         isNowPlayingActive = true
         if !wasAlreadyNowPlaying {
-            isNowPlayingVolumeMode = false
-            screenView.setVolumeBarMode(false, volume: currentSystemVolume())
+            nowPlayingBarMode = .duration
+            screenView.setNowPlayingBarMode(
+                .duration,
+                volume: currentSystemVolume(),
+                sleepSetMinutes: sleepSetMinutes,
+                sleepRemainingSeconds: sleepRemainingSeconds,
+                isSleepActive: isSleepTimerActive
+            )
         }
         let track = currentQueue[currentTrackIndex]
         screenView.showNowPlaying(
@@ -1239,6 +1275,68 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         playNextTrack()
+    }
+
+    private func adjustSleepTimer(byMinutes delta: Int) {
+        let nextMinutes = min(max(0, sleepSetMinutes + delta), 60)
+        setSleepTimerMinutes(nextMinutes, startActivationCountdown: true)
+    }
+
+    private func setSleepTimerMinutes(_ minutes: Int, startActivationCountdown: Bool) {
+        sleepActivationTimer?.invalidate()
+        sleepActivationTimer = nil
+        sleepCountdownTimer?.invalidate()
+        sleepCountdownTimer = nil
+        isSleepTimerActive = false
+
+        sleepSetMinutes = min(max(0, minutes), 60)
+        sleepRemainingSeconds = sleepSetMinutes * 60
+        screenView.updateSleepTimerDisplay(
+            setMinutes: sleepSetMinutes,
+            remainingSeconds: sleepRemainingSeconds,
+            isActive: false
+        )
+
+        if sleepSetMinutes >= 1 && startActivationCountdown {
+            sleepActivationTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
+                self?.activateSleepTimer()
+            }
+        }
+    }
+
+    private func activateSleepTimer() {
+        sleepActivationTimer = nil
+        guard sleepSetMinutes >= 1 else { return }
+
+        isSleepTimerActive = true
+        sleepRemainingSeconds = sleepSetMinutes * 60
+        screenView.updateSleepTimerDisplay(
+            setMinutes: sleepSetMinutes,
+            remainingSeconds: sleepRemainingSeconds,
+            isActive: true
+        )
+
+        sleepCountdownTimer?.invalidate()
+        sleepCountdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            self.sleepRemainingSeconds = max(0, self.sleepRemainingSeconds - 1)
+            self.screenView.updateSleepTimerDisplay(
+                setMinutes: self.sleepSetMinutes,
+                remainingSeconds: self.sleepRemainingSeconds,
+                isActive: self.sleepRemainingSeconds > 0
+            )
+            if self.sleepRemainingSeconds <= 0 {
+                self.sleepCountdownTimer?.invalidate()
+                self.sleepCountdownTimer = nil
+                self.isSleepTimerActive = false
+                self.sleepSetMinutes = 0
+                self.screenView.updateSleepTimerDisplay(setMinutes: 0, remainingSeconds: 0, isActive: false)
+                if self.isPlaying {
+                    self.togglePlayPause()
+                }
+                self.screenView.showStatusBanner("Waktu tidur selesai • Musik dijeda")
+            }
+        }
     }
 
     private func seekBy(seconds delta: Double) {
