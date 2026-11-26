@@ -15,6 +15,9 @@ enum IPodMenuNode {
 class IPodViewController: UIViewController, ClickWheelDelegate {
     private let bodyGradient = CAGradientLayer()
     private let ambientGlowImageView = UIImageView()
+    private let mirrorContainerView = UIView()
+    private let mirrorReflectionImageView = UIImageView()
+    private let mirrorMaskView = UIImageView()
     private let screenView = IPodScreenView()
     private let clickWheel = ClickWheelView()
 
@@ -32,6 +35,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var currentGlowColor = UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
     private var playingTrackArtwork: UIImage?
     private var lastGlowSize: CGSize = .zero
+    private var lastMirrorSize: CGSize = .zero
     private let hiddenVolumeView = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
     private var volumeObserver: NSKeyValueObservation?
 
@@ -172,9 +176,15 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             lastGlowSize = glowSize
             ambientGlowImageView.image = makeSmoothLcdAmbientImage(
                 canvasSize: glowSize,
-                lcdRect: screenFrameInGlow,
-                wheelRect: wheelFrameInGlow
+                lcdRect: screenFrameInGlow
             )
+        }
+
+        let mirrorSize = mirrorContainerView.bounds.size
+        if mirrorSize.width > 0, mirrorSize.height > 0, mirrorSize != lastMirrorSize {
+            lastMirrorSize = mirrorSize
+            mirrorMaskView.frame = mirrorContainerView.bounds
+            mirrorMaskView.image = makeMirrorFadeMaskImage(size: mirrorSize)
         }
     }
 
@@ -184,6 +194,19 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         ambientGlowImageView.contentMode = .scaleToFill
         ambientGlowImageView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(ambientGlowImageView)
+
+        mirrorContainerView.clipsToBounds = true
+        mirrorContainerView.isUserInteractionEnabled = false
+        mirrorContainerView.translatesAutoresizingMaskIntoConstraints = false
+        mirrorContainerView.mask = mirrorMaskView
+        view.addSubview(mirrorContainerView)
+
+        mirrorReflectionImageView.contentMode = .scaleAspectFill
+        mirrorReflectionImageView.clipsToBounds = true
+        mirrorReflectionImageView.alpha = 0.44
+        mirrorReflectionImageView.transform = CGAffineTransform(scaleX: 1.0, y: -1.0)
+        mirrorReflectionImageView.translatesAutoresizingMaskIntoConstraints = false
+        mirrorContainerView.addSubview(mirrorReflectionImageView)
 
         screenView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(screenView)
@@ -206,6 +229,16 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             ambientGlowImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             ambientGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
+            mirrorContainerView.topAnchor.constraint(equalTo: screenView.bottomAnchor),
+            mirrorContainerView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor),
+            mirrorContainerView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor),
+            mirrorContainerView.bottomAnchor.constraint(equalTo: clickWheel.centerYAnchor, constant: 22),
+
+            mirrorReflectionImageView.topAnchor.constraint(equalTo: mirrorContainerView.topAnchor),
+            mirrorReflectionImageView.bottomAnchor.constraint(equalTo: mirrorContainerView.bottomAnchor),
+            mirrorReflectionImageView.leadingAnchor.constraint(equalTo: mirrorContainerView.leadingAnchor),
+            mirrorReflectionImageView.trailingAnchor.constraint(equalTo: mirrorContainerView.trailingAnchor),
+
             clickWheel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -44),
             clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.70),
@@ -215,8 +248,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private func makeSmoothLcdAmbientImage(
         canvasSize: CGSize,
-        lcdRect: CGRect,
-        wheelRect: CGRect
+        lcdRect: CGRect
     ) -> UIImage? {
         let w = canvasSize.width
         let h = canvasSize.height
@@ -225,7 +257,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        // 1. Bright-to-soft Gaussian halo around all 4 sides of the LCD
+        // Soft Gaussian backlight halo around the LCD edges
         let haloPath = UIBezierPath(roundedRect: lcdRect.insetBy(dx: 1.0, dy: 1.0), cornerRadius: 8.0)
 
         ctx.saveGState()
@@ -240,71 +272,58 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         haloPath.fill()
         ctx.restoreGState()
 
-        // 2. Soft rectangular light column matching the LCD + side-halo width, fading smoothly
-        //    and ending cleanly around halfway across the scroll wheel (nothing below midpoint).
-        let downTopY = max(0.0, lcdRect.maxY - 22.0)
-        let downBottomY = min(h, wheelRect.midY)
-        let downHeight = downBottomY - downTopY
-        if downHeight > 4.0 {
-            ctx.saveGState()
-            ctx.clip(to: CGRect(x: 0, y: downTopY, width: w, height: downHeight))
-            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
-
-            let hLeftOut = max(0.0, (lcdRect.minX - 20.0) / w)
-            let hLeftMid = max(hLeftOut + 0.01, min(0.42, (lcdRect.minX - 8.0) / w))
-            let hLeftEdge = max(hLeftMid + 0.01, min(0.48, (lcdRect.minX + 2.0) / w))
-            let hRightEdge = max(0.52, min(0.95, (lcdRect.maxX - 2.0) / w))
-            let hRightMid = max(hRightEdge + 0.01, min(0.98, (lcdRect.maxX + 8.0) / w))
-            let hRightOut = min(1.0, max(hRightMid + 0.01, (lcdRect.maxX + 20.0) / w))
-
-            let hColors = [
-                UIColor.white.withAlphaComponent(0.0).cgColor,
-                UIColor.white.withAlphaComponent(0.42).cgColor,
-                UIColor.white.withAlphaComponent(0.96).cgColor,
-                UIColor.white.withAlphaComponent(1.0).cgColor,
-                UIColor.white.withAlphaComponent(0.96).cgColor,
-                UIColor.white.withAlphaComponent(0.42).cgColor,
-                UIColor.white.withAlphaComponent(0.0).cgColor
-            ] as CFArray
-            let hLocations: [CGFloat] = [hLeftOut, hLeftMid, hLeftEdge, 0.5, hRightEdge, hRightMid, hRightOut]
-
-            if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
-                ctx.drawLinearGradient(
-                    hGrad,
-                    start: CGPoint(x: 0, y: downTopY + downHeight * 0.5),
-                    end: CGPoint(x: w, y: downTopY + downHeight * 0.5),
-                    options: []
-                )
-            }
-
-            ctx.setBlendMode(.destinationIn)
-            let locLcdBottom = max(0.06, min(0.45, (lcdRect.maxY - downTopY) / downHeight))
-            let locWheelTop = max(locLcdBottom + 0.05, min(0.75, (wheelRect.minY - downTopY) / downHeight))
-
-            let vColors = [
-                UIColor.white.withAlphaComponent(0.0).cgColor,
-                UIColor.white.withAlphaComponent(0.54).cgColor,
-                UIColor.white.withAlphaComponent(0.30).cgColor,
-                UIColor.white.withAlphaComponent(0.0).cgColor
-            ] as CFArray
-            let vLocations: [CGFloat] = [0.0, locLcdBottom, locWheelTop, 1.0]
-
-            if let vGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: vColors, locations: vLocations) {
-                ctx.drawLinearGradient(
-                    vGrad,
-                    start: CGPoint(x: w * 0.5, y: downTopY),
-                    end: CGPoint(x: w * 0.5, y: downBottomY),
-                    options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
-                )
-            }
-
-            ctx.endTransparencyLayer()
-            ctx.restoreGState()
-        }
-
         let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
         UIGraphicsEndImageContext()
         return img
+    }
+
+    private func makeMirrorFadeMaskImage(size: CGSize) -> UIImage? {
+        let w = size.width
+        let h = size.height
+        guard w > 1, h > 1 else { return nil }
+
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        defer { UIGraphicsEndImageContext() }
+        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
+
+        let hColors = [
+            UIColor.white.withAlphaComponent(0.0).cgColor,
+            UIColor.white.withAlphaComponent(0.45).cgColor,
+            UIColor.white.withAlphaComponent(1.0).cgColor,
+            UIColor.white.withAlphaComponent(1.0).cgColor,
+            UIColor.white.withAlphaComponent(0.45).cgColor,
+            UIColor.white.withAlphaComponent(0.0).cgColor
+        ] as CFArray
+        let hLocations: [CGFloat] = [0.0, 0.10, 0.24, 0.76, 0.90, 1.0]
+
+        if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
+            ctx.drawLinearGradient(
+                hGrad,
+                start: CGPoint(x: 0, y: h * 0.5),
+                end: CGPoint(x: w, y: h * 0.5),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+        }
+
+        ctx.setBlendMode(.destinationIn)
+        let vColors = [
+            UIColor.white.withAlphaComponent(0.95).cgColor,
+            UIColor.white.withAlphaComponent(0.62).cgColor,
+            UIColor.white.withAlphaComponent(0.24).cgColor,
+            UIColor.white.withAlphaComponent(0.0).cgColor
+        ] as CFArray
+        let vLocations: [CGFloat] = [0.0, 0.28, 0.65, 1.0]
+
+        if let vGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: vColors, locations: vLocations) {
+            ctx.drawLinearGradient(
+                vGrad,
+                start: CGPoint(x: w * 0.5, y: 0),
+                end: CGPoint(x: w * 0.5, y: h),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+        }
+
+        return UIGraphicsGetImageFromCurrentImageContext()
     }
 
     private func applyThemeToBodyAndWheel() {
@@ -335,15 +354,28 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func applyGlowColors(_ color: UIColor) {
         guard isAmbientGlowEnabled else {
             ambientGlowImageView.alpha = 0.0
+            mirrorContainerView.alpha = 0.0
             return
         }
         let isDark = (screenView.theme == .darkPod)
         ambientGlowImageView.tintColor = color
         ambientGlowImageView.alpha = isDark ? 0.85 : 0.52
+        mirrorContainerView.alpha = isDark ? 1.0 : 0.65
     }
 
     private func updateAmbientGlow(from image: UIImage?) {
-        let glowColor = extractDominantColor(from: image) ?? (screenView.theme == .darkPod
+        let reflectionImage = image ?? playingTrackArtwork
+        if mirrorReflectionImageView.image !== reflectionImage {
+            UIView.transition(
+                with: mirrorReflectionImageView,
+                duration: 0.35,
+                options: [.transitionCrossDissolve]
+            ) {
+                self.mirrorReflectionImageView.image = reflectionImage
+            }
+        }
+
+        let glowColor = extractDominantColor(from: reflectionImage) ?? (screenView.theme == .darkPod
             ? UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
             : UIColor(red: 0.62, green: 0.42, blue: 0.22, alpha: 1.0))
 
