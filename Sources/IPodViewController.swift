@@ -13,6 +13,8 @@ enum IPodMenuNode {
 
 class IPodViewController: UIViewController, ClickWheelDelegate {
     private let bodyGradient = CAGradientLayer()
+    private let ambientGlowView = UIView()
+    private let glassFrameView = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
     private let screenView = IPodScreenView()
     private let clickWheel = ClickWheelView()
 
@@ -35,6 +37,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         super.viewDidLoad()
         isPlaylistsMenuEnabled = UserDefaults.standard.object(forKey: "ipod_playlists_enabled") as? Bool ?? true
         setupBodyAndLayout()
+        applyThemeToBodyAndWheel()
         setupAudioSession()
         setupRemoteCommands()
 
@@ -51,6 +54,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             self?.seekToRatio(ratio)
         }
 
+        screenView.onActiveCoverImageChanged = { [weak self] image in
+            self?.updateAmbientGlow(from: image)
+        }
+
         renderTopMenu(restoreIndex: 0)
 
         IPodMusicLibrary.shared.requestAccessAndLoad { [weak self] in
@@ -64,11 +71,23 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     private func setupBodyAndLayout() {
-        bodyGradient.colors = [
-            UIColor(white: 0.88, alpha: 1.0).cgColor,
-            UIColor(white: 0.76, alpha: 1.0).cgColor
-        ]
         view.layer.insertSublayer(bodyGradient, at: 0)
+
+        // Efek cahaya ambient di belakang LCD yang berubah mengikuti warna sampul lagu
+        ambientGlowView.backgroundColor = UIColor(red: 0.25, green: 0.50, blue: 0.90, alpha: 0.42)
+        ambientGlowView.layer.cornerRadius = 24
+        ambientGlowView.layer.shadowColor = UIColor(red: 0.25, green: 0.50, blue: 0.90, alpha: 1.0).cgColor
+        ambientGlowView.layer.shadowOpacity = 0.75
+        ambientGlowView.layer.shadowOffset = .zero
+        ambientGlowView.layer.shadowRadius = 24
+        ambientGlowView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(ambientGlowView)
+
+        // Bingkai kaca frosted glass halus di belakang LCD
+        glassFrameView.layer.cornerRadius = 15
+        glassFrameView.clipsToBounds = true
+        glassFrameView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(glassFrameView)
 
         screenView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(screenView)
@@ -80,15 +99,25 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         view.addLayoutGuide(bottomAreaGuide)
 
         NSLayoutConstraint.activate([
-            // LCD menempel rapat ke bagian atas layar
-            screenView.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
+            // Sedikit turunkan posisi LCD dari tepi atas
+            screenView.topAnchor.constraint(equalTo: view.topAnchor, constant: 22),
             screenView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
-            screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.82),
+            screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.80),
 
-            // Area bawah LCD hingga tepi bawah untuk menempatkan Click Wheel sedikit lebih ke atas
+            glassFrameView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: -4),
+            glassFrameView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor, constant: 4),
+            glassFrameView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor, constant: -4),
+            glassFrameView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor, constant: 4),
+
+            ambientGlowView.topAnchor.constraint(equalTo: screenView.topAnchor, constant: 4),
+            ambientGlowView.bottomAnchor.constraint(equalTo: screenView.bottomAnchor, constant: -4),
+            ambientGlowView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor, constant: 4),
+            ambientGlowView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor, constant: -4),
+
+            // Area bawah LCD hingga tepi bawah sehingga posisi Click Wheel ikut turun secara seimbang
             bottomAreaGuide.topAnchor.constraint(equalTo: screenView.bottomAnchor),
-            bottomAreaGuide.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -14),
+            bottomAreaGuide.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6),
             bottomAreaGuide.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             bottomAreaGuide.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
@@ -97,6 +126,86 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.71),
             clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor)
         ])
+    }
+
+    private func applyThemeToBodyAndWheel() {
+        let theme = screenView.theme
+        clickWheel.applyTheme(theme)
+
+        switch theme {
+        case .darkPod:
+            bodyGradient.colors = [
+                UIColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0).cgColor,
+                UIColor(red: 0.04, green: 0.04, blue: 0.05, alpha: 1.0).cgColor
+            ]
+            glassFrameView.effect = UIBlurEffect(style: .dark)
+            ambientGlowView.alpha = 1.0
+
+        case .sepiaPod:
+            bodyGradient.colors = [
+                UIColor(red: 0.90, green: 0.85, blue: 0.76, alpha: 1.0).cgColor,
+                UIColor(red: 0.80, green: 0.74, blue: 0.63, alpha: 1.0).cgColor
+            ]
+            glassFrameView.effect = UIBlurEffect(style: .light)
+            ambientGlowView.alpha = 0.55
+
+        case .classicBlue:
+            bodyGradient.colors = [
+                UIColor(white: 0.88, alpha: 1.0).cgColor,
+                UIColor(white: 0.76, alpha: 1.0).cgColor
+            ]
+            glassFrameView.effect = UIBlurEffect(style: .light)
+            ambientGlowView.alpha = 0.55
+        }
+    }
+
+    private func updateAmbientGlow(from image: UIImage?) {
+        let glowColor = extractDominantColor(from: image) ?? (screenView.theme == .darkPod
+            ? UIColor(red: 0.25, green: 0.52, blue: 0.92, alpha: 1.0)
+            : UIColor(red: 0.62, green: 0.42, blue: 0.22, alpha: 1.0))
+
+        UIView.animate(withDuration: 0.45) {
+            self.ambientGlowView.backgroundColor = glowColor.withAlphaComponent(0.42)
+            self.ambientGlowView.layer.shadowColor = glowColor.cgColor
+        }
+    }
+
+    private func extractDominantColor(from image: UIImage?) -> UIColor? {
+        guard let cgImage = image?.cgImage else { return nil }
+        let width = 12
+        let height = 12
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        var rawData = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(
+            data: &rawData,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var rTotal: CGFloat = 0
+        var gTotal: CGFloat = 0
+        var bTotal: CGFloat = 0
+        let count = CGFloat(width * height)
+
+        for i in stride(from: 0, to: rawData.count, by: 4) {
+            rTotal += CGFloat(rawData[i]) / 255.0
+            gTotal += CGFloat(rawData[i + 1]) / 255.0
+            bTotal += CGFloat(rawData[i + 2]) / 255.0
+        }
+
+        // Tingkatkan saturasi sedikit agar cahaya di belakang LCD tampak hidup
+        let avgColor = UIColor(red: rTotal / count, green: gTotal / count, blue: bTotal / count, alpha: 1.0)
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        if avgColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
+            return UIColor(hue: h, saturation: min(1.0, max(s * 1.35, 0.35)), brightness: min(1.0, max(b * 1.15, 0.55)), alpha: 1.0)
+        }
+        return avgColor
     }
 
     private func setupAudioSession() {
@@ -114,7 +223,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func rows(for node: IPodMenuNode) -> (title: String, items: [IPodMenuRow]) {
         switch node {
         case .root:
-            // Menu Now Playing dihilangkan dari menu utama
             return ("iPod", [
                 IPodMenuRow(title: "Music", hasSubmenu: true),
                 IPodMenuRow(title: "Shuffle Songs", hasSubmenu: false),
@@ -184,7 +292,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         renderTopMenu(restoreIndex: 0)
     }
 
-    // MARK: - Fitur Buat Playlist Baru Sinkron ke Aplikasi Music Bawaan
+    // MARK: - Buat Playlist Sinkron ke Aplikasi Music Bawaan
     private func presentCreatePlaylistDialog() {
         let alert = UIAlertController(
             title: "New Playlist",
@@ -281,7 +389,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         switch top.node {
         case .root:
             if idx == 0 {
-                // Jika toggle Playlists Menu OFF, klik Music langsung membuka daftar lagu (Songs)
                 if isPlaylistsMenuEnabled {
                     pushMenu(.music)
                 } else {
@@ -330,6 +437,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 let allThemes = IPodColorTheme.allCases
                 if let currentIdx = allThemes.firstIndex(of: screenView.theme) {
                     screenView.theme = allThemes[(currentIdx + 1) % allThemes.count]
+                    applyThemeToBodyAndWheel()
                 }
                 renderTopMenu(restoreIndex: 0)
             } else if idx == 1 {
@@ -411,6 +519,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         player?.play()
         isPlaying = true
         screenView.updatePlayState(isPlaying: true)
+        updateAmbientGlow(from: track.artworkImage)
 
         if isNowPlayingActive {
             screenView.showNowPlaying(

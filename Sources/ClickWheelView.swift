@@ -23,56 +23,85 @@ class ClickWheelView: UIView {
     private var lastAngle: CGFloat?
     private var accumulatedAngle: CGFloat = 0
     private var didScrollDuringTouch = false
-    private let stepThreshold: CGFloat = 0.30 // ~17 derajat per klik menu
+    private let stepThreshold: CGFloat = 0.30
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         setupWheel()
+        applyTheme(.darkPod)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     private func setupWheel() {
-        wheelLayer.fillColor = UIColor(white: 0.96, alpha: 1.0).cgColor
-        wheelLayer.strokeColor = UIColor(white: 0.78, alpha: 1.0).cgColor
         wheelLayer.lineWidth = 1.5
         wheelLayer.shadowColor = UIColor.black.cgColor
-        wheelLayer.shadowOpacity = 0.25
-        wheelLayer.shadowOffset = CGSize(width: 0, height: 3)
-        wheelLayer.shadowRadius = 6
+        wheelLayer.shadowOpacity = 0.32
+        wheelLayer.shadowOffset = CGSize(width: 0, height: 4)
+        wheelLayer.shadowRadius = 8
         layer.addSublayer(wheelLayer)
 
-        let labelColor = UIColor(white: 0.45, alpha: 1.0)
         menuLabel.text = "MENU"
         menuLabel.font = UIFont.systemFont(ofSize: 13, weight: .bold)
-        menuLabel.textColor = labelColor
         menuLabel.textAlignment = .center
         addSubview(menuLabel)
 
         nextLabel.text = "▶▶|"
         nextLabel.font = UIFont.systemFont(ofSize: 12, weight: .bold)
-        nextLabel.textColor = labelColor
         nextLabel.textAlignment = .center
         addSubview(nextLabel)
 
         prevLabel.text = "|◀◀"
         prevLabel.font = UIFont.systemFont(ofSize: 12, weight: .bold)
-        prevLabel.textColor = labelColor
         prevLabel.textAlignment = .center
         addSubview(prevLabel)
 
         playPauseLabel.text = "▶❚❚"
         playPauseLabel.font = UIFont.systemFont(ofSize: 12, weight: .bold)
-        playPauseLabel.textColor = labelColor
         playPauseLabel.textAlignment = .center
         addSubview(playPauseLabel)
 
-        centerButton.backgroundColor = UIColor(white: 0.84, alpha: 1.0)
-        centerButton.layer.borderColor = UIColor(white: 0.74, alpha: 1.0).cgColor
         centerButton.layer.borderWidth = 1.0
         centerButton.addTarget(self, action: #selector(didTapCenter), for: .touchUpInside)
         addSubview(centerButton)
+    }
+
+    func applyTheme(_ theme: IPodColorTheme) {
+        switch theme {
+        case .darkPod:
+            wheelLayer.fillColor = UIColor(red: 0.14, green: 0.14, blue: 0.16, alpha: 1.0).cgColor
+            wheelLayer.strokeColor = UIColor(white: 0.24, alpha: 1.0).cgColor
+            centerButton.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1.0)
+            centerButton.layer.borderColor = UIColor(white: 0.22, alpha: 1.0).cgColor
+            let textCol = UIColor(white: 0.78, alpha: 1.0)
+            menuLabel.textColor = textCol
+            nextLabel.textColor = textCol
+            prevLabel.textColor = textCol
+            playPauseLabel.textColor = textCol
+
+        case .sepiaPod:
+            wheelLayer.fillColor = UIColor(red: 0.96, green: 0.93, blue: 0.87, alpha: 1.0).cgColor
+            wheelLayer.strokeColor = UIColor(red: 0.80, green: 0.74, blue: 0.64, alpha: 1.0).cgColor
+            centerButton.backgroundColor = UIColor(red: 0.86, green: 0.80, blue: 0.70, alpha: 1.0)
+            centerButton.layer.borderColor = UIColor(red: 0.75, green: 0.68, blue: 0.58, alpha: 1.0).cgColor
+            let textCol = UIColor(red: 0.42, green: 0.33, blue: 0.23, alpha: 1.0)
+            menuLabel.textColor = textCol
+            nextLabel.textColor = textCol
+            prevLabel.textColor = textCol
+            playPauseLabel.textColor = textCol
+
+        case .classicBlue:
+            wheelLayer.fillColor = UIColor(white: 0.96, alpha: 1.0).cgColor
+            wheelLayer.strokeColor = UIColor(white: 0.78, alpha: 1.0).cgColor
+            centerButton.backgroundColor = UIColor(white: 0.84, alpha: 1.0)
+            centerButton.layer.borderColor = UIColor(white: 0.74, alpha: 1.0).cgColor
+            let textCol = UIColor(white: 0.45, alpha: 1.0)
+            menuLabel.textColor = textCol
+            nextLabel.textColor = textCol
+            prevLabel.textColor = textCol
+            playPauseLabel.textColor = textCol
+        }
     }
 
     override func layoutSubviews() {
@@ -111,7 +140,6 @@ class ClickWheelView: UIView {
         AudioServicesPlaySystemSound(1104)
     }
 
-    // MARK: - Touch & Rotational Gesture Handling
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
         let pt = touch.location(in: self)

@@ -15,31 +15,15 @@ enum IPodColorTheme: CaseIterable {
 
     var screenBackground: UIColor {
         switch self {
-        case .darkPod:     return UIColor(red: 0.08, green: 0.08, blue: 0.09, alpha: 1.0)
-        case .sepiaPod:    return UIColor(red: 0.96, green: 0.92, blue: 0.83, alpha: 1.0)
-        case .classicBlue: return UIColor(red: 0.96, green: 0.97, blue: 0.99, alpha: 1.0)
-        }
-    }
-
-    var headerBackground: UIColor {
-        switch self {
-        case .darkPod:     return UIColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1.0)
-        case .sepiaPod:    return UIColor(red: 0.90, green: 0.84, blue: 0.72, alpha: 1.0)
-        case .classicBlue: return UIColor(white: 0.90, alpha: 1.0)
-        }
-    }
-
-    var headerBorderColor: UIColor {
-        switch self {
-        case .darkPod:     return UIColor(white: 0.24, alpha: 1.0)
-        case .sepiaPod:    return UIColor(red: 0.76, green: 0.69, blue: 0.57, alpha: 1.0)
-        case .classicBlue: return UIColor(white: 0.72, alpha: 1.0)
+        case .darkPod:     return UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 0.92)
+        case .sepiaPod:    return UIColor(red: 0.96, green: 0.92, blue: 0.83, alpha: 0.96)
+        case .classicBlue: return UIColor(red: 0.96, green: 0.97, blue: 0.99, alpha: 0.96)
         }
     }
 
     var primaryText: UIColor {
         switch self {
-        case .darkPod:     return UIColor(white: 0.95, alpha: 1.0)
+        case .darkPod:     return UIColor(white: 0.96, alpha: 1.0)
         case .sepiaPod:    return UIColor(red: 0.24, green: 0.17, blue: 0.10, alpha: 1.0)
         case .classicBlue: return UIColor(white: 0.10, alpha: 1.0)
         }
@@ -86,6 +70,7 @@ class IPodMenuCell: UITableViewCell {
         backgroundColor = .clear
 
         highlightGradient.isHidden = true
+        highlightGradient.cornerRadius = 5
         contentView.layer.insertSublayer(highlightGradient, at: 0)
 
         titleLabel.font = UIFont.systemFont(ofSize: 15, weight: .semibold)
@@ -99,11 +84,11 @@ class IPodMenuCell: UITableViewCell {
         contentView.addSubview(arrowLabel)
 
         NSLayoutConstraint.activate([
-            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 10),
+            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
             titleLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             titleLabel.trailingAnchor.constraint(equalTo: arrowLabel.leadingAnchor, constant: -6),
 
-            arrowLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -10),
+            arrowLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
             arrowLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             arrowLabel.widthAnchor.constraint(equalToConstant: 16)
         ])
@@ -111,7 +96,7 @@ class IPodMenuCell: UITableViewCell {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        highlightGradient.frame = contentView.bounds
+        highlightGradient.frame = contentView.bounds.insetBy(dx: 6, dy: 1)
     }
 
     func configure(row: IPodMenuRow, isSelected: Bool, theme: IPodColorTheme) {
@@ -147,7 +132,7 @@ class IPodCoverFlowCell: UICollectionViewCell {
         coverImageView.contentMode = .scaleAspectFill
         coverImageView.clipsToBounds = true
         coverImageView.layer.borderWidth = 1.0
-        coverImageView.layer.borderColor = UIColor(white: 0.45, alpha: 0.7).cgColor
+        coverImageView.layer.borderColor = UIColor(white: 0.45, alpha: 0.6).cgColor
         coverImageView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(coverImageView)
 
@@ -199,14 +184,16 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     var onCoverFlowTrackSelected: ((Int) -> Void)?
     var onSeekRatioChanged: ((Double) -> Void)?
+    var onActiveCoverImageChanged: ((UIImage?) -> Void)?
 
-    // Top Status Bar (Kiri: Nama Menu, Tengah: Jam, Kanan: Play Icon + Baterai)
+    // Modern Seamless Status Bar (Menyatu dengan LCD, ikon Play & Baterai putih)
     private let headerBar = UIView()
-    private let headerBorder = UIView()
+    private let headerSubtleTint = CAGradientLayer()
     private let headerTitleLabel = UILabel()
     private let clockLabel = UILabel()
     private let playStateIcon = UILabel()
     private let batteryView = UIView()
+    private let batteryCapView = UIView()
     private let batteryFill = UIView()
     private var clockTimer: Timer?
 
@@ -246,9 +233,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        layer.cornerRadius = 8
-        layer.borderWidth = 3.0
-        layer.borderColor = UIColor(white: 0.12, alpha: 1.0).cgColor
+        layer.cornerRadius = 12
+        layer.borderWidth = 1.5
+        layer.borderColor = UIColor(white: 0.26, alpha: 0.85).cgColor
         clipsToBounds = true
         setupUI()
         applyTheme()
@@ -258,13 +245,14 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     required init?(coder: NSCoder) { fatalError() }
 
     private func setupUI() {
+        // Status bar menyatu langsung dengan background layar tanpa sekat garis kasar
+        headerBar.backgroundColor = .clear
         headerBar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(headerBar)
 
-        headerBorder.translatesAutoresizingMaskIntoConstraints = false
-        headerBar.addSubview(headerBorder)
+        headerSubtleTint.locations = [0.0, 1.0]
+        headerBar.layer.insertSublayer(headerSubtleTint, at: 0)
 
-        // Kiri: Nama Menu
         headerTitleLabel.text = "iPod"
         headerTitleLabel.font = UIFont.systemFont(ofSize: 12, weight: .bold)
         headerTitleLabel.textAlignment = .left
@@ -272,25 +260,28 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         headerTitleLabel.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(headerTitleLabel)
 
-        // Tengah: Jam Digital
         clockLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         clockLabel.textAlignment = .center
         clockLabel.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(clockLabel)
 
-        // Kanan: Ikon Play/Pause & Baterai
         playStateIcon.text = "❚❚"
         playStateIcon.font = UIFont.systemFont(ofSize: 10, weight: .bold)
         playStateIcon.textAlignment = .right
         playStateIcon.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(playStateIcon)
 
+        // Ikon baterai modern kapsul membulat
         batteryView.layer.borderWidth = 1.2
-        batteryView.layer.cornerRadius = 2
+        batteryView.layer.cornerRadius = 3.5
         batteryView.translatesAutoresizingMaskIntoConstraints = false
         headerBar.addSubview(batteryView)
 
-        batteryFill.backgroundColor = UIColor(red: 0.25, green: 0.78, blue: 0.35, alpha: 1.0)
+        batteryCapView.layer.cornerRadius = 1.0
+        batteryCapView.translatesAutoresizingMaskIntoConstraints = false
+        headerBar.addSubview(batteryCapView)
+
+        batteryFill.layer.cornerRadius = 2.0
         batteryFill.translatesAutoresizingMaskIntoConstraints = false
         batteryView.addSubview(batteryFill)
 
@@ -351,7 +342,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         artworkView.contentMode = .scaleAspectFill
         artworkView.clipsToBounds = true
         artworkView.layer.borderWidth = 1.0
-        artworkView.layer.borderColor = UIColor(white: 0.45, alpha: 0.7).cgColor
+        artworkView.layer.borderColor = UIColor(white: 0.45, alpha: 0.6).cgColor
         artworkView.backgroundColor = UIColor(white: 0.25, alpha: 1.0)
         artworkView.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(artworkView)
@@ -410,45 +401,42 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         UIDevice.current.isBatteryMonitoringEnabled = true
         let level = UIDevice.current.batteryLevel
-        let batRatio: CGFloat = level >= 0 ? CGFloat(max(0.15, level)) : 0.85
+        let batRatio: CGFloat = level >= 0 ? CGFloat(max(0.18, level)) : 0.85
 
         NSLayoutConstraint.activate([
             headerBar.topAnchor.constraint(equalTo: topAnchor),
             headerBar.leadingAnchor.constraint(equalTo: leadingAnchor),
             headerBar.trailingAnchor.constraint(equalTo: trailingAnchor),
-            headerBar.heightAnchor.constraint(equalToConstant: 26),
+            headerBar.heightAnchor.constraint(equalToConstant: 28),
 
-            headerBorder.bottomAnchor.constraint(equalTo: headerBar.bottomAnchor),
-            headerBorder.leadingAnchor.constraint(equalTo: headerBar.leadingAnchor),
-            headerBorder.trailingAnchor.constraint(equalTo: headerBar.trailingAnchor),
-            headerBorder.heightAnchor.constraint(equalToConstant: 1),
-
-            // Kiri: Nama Menu
-            headerTitleLabel.leadingAnchor.constraint(equalTo: headerBar.leadingAnchor, constant: 8),
+            headerTitleLabel.leadingAnchor.constraint(equalTo: headerBar.leadingAnchor, constant: 12),
             headerTitleLabel.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
             headerTitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: clockLabel.leadingAnchor, constant: -6),
 
-            // Tengah: Jam
             clockLabel.centerXAnchor.constraint(equalTo: headerBar.centerXAnchor),
             clockLabel.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
             clockLabel.widthAnchor.constraint(equalToConstant: 46),
 
-            // Kanan: Play Icon + Baterai
-            batteryView.trailingAnchor.constraint(equalTo: headerBar.trailingAnchor, constant: -8),
+            batteryCapView.trailingAnchor.constraint(equalTo: headerBar.trailingAnchor, constant: -10),
+            batteryCapView.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
+            batteryCapView.widthAnchor.constraint(equalToConstant: 2.0),
+            batteryCapView.heightAnchor.constraint(equalToConstant: 5.0),
+
+            batteryView.trailingAnchor.constraint(equalTo: batteryCapView.leadingAnchor, constant: -1.5),
             batteryView.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
             batteryView.widthAnchor.constraint(equalToConstant: 22),
             batteryView.heightAnchor.constraint(equalToConstant: 11),
 
-            batteryFill.topAnchor.constraint(equalTo: batteryView.topAnchor, constant: 1.5),
-            batteryFill.bottomAnchor.constraint(equalTo: batteryView.bottomAnchor, constant: -1.5),
-            batteryFill.leadingAnchor.constraint(equalTo: batteryView.leadingAnchor, constant: 1.5),
-            batteryFill.widthAnchor.constraint(equalTo: batteryView.widthAnchor, multiplier: batRatio, constant: -3),
+            batteryFill.topAnchor.constraint(equalTo: batteryView.topAnchor, constant: 1.8),
+            batteryFill.bottomAnchor.constraint(equalTo: batteryView.bottomAnchor, constant: -1.8),
+            batteryFill.leadingAnchor.constraint(equalTo: batteryView.leadingAnchor, constant: 1.8),
+            batteryFill.widthAnchor.constraint(equalTo: batteryView.widthAnchor, multiplier: batRatio, constant: -3.6),
 
-            playStateIcon.trailingAnchor.constraint(equalTo: batteryView.leadingAnchor, constant: -5),
+            playStateIcon.trailingAnchor.constraint(equalTo: batteryView.leadingAnchor, constant: -6),
             playStateIcon.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
             playStateIcon.leadingAnchor.constraint(greaterThanOrEqualTo: clockLabel.trailingAnchor, constant: 4),
 
-            tableView.topAnchor.constraint(equalTo: headerBar.bottomAnchor),
+            tableView.topAnchor.constraint(equalTo: headerBar.bottomAnchor, constant: 2),
             tableView.leadingAnchor.constraint(equalTo: leadingAnchor),
             tableView.trailingAnchor.constraint(equalTo: trailingAnchor),
             tableView.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -458,7 +446,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             coverFlowContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
             coverFlowContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            coverCollectionView.topAnchor.constraint(equalTo: coverFlowContainer.topAnchor, constant: 6),
+            coverCollectionView.topAnchor.constraint(equalTo: coverFlowContainer.topAnchor, constant: 4),
             coverCollectionView.leadingAnchor.constraint(equalTo: coverFlowContainer.leadingAnchor),
             coverCollectionView.trailingAnchor.constraint(equalTo: coverFlowContainer.trailingAnchor),
             coverCollectionView.bottomAnchor.constraint(equalTo: coverFlowContainer.bottomAnchor),
@@ -476,7 +464,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             nowPlayingContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
             nowPlayingContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            trackIndexLabel.topAnchor.constraint(equalTo: nowPlayingContainer.topAnchor, constant: 8),
+            trackIndexLabel.topAnchor.constraint(equalTo: nowPlayingContainer.topAnchor, constant: 6),
             trackIndexLabel.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 12),
 
             artworkView.topAnchor.constraint(equalTo: trackIndexLabel.bottomAnchor, constant: 8),
@@ -539,6 +527,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        headerSubtleTint.frame = headerBar.bounds
         if let layout = coverCollectionView.collectionViewLayout as? UICollectionViewFlowLayout {
             let sideInset = max(0, (bounds.width - layout.itemSize.width) / 2.0)
             layout.sectionInset = UIEdgeInsets(top: 0, left: sideInset, bottom: 0, right: sideInset)
@@ -548,12 +537,26 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     private func applyTheme() {
         backgroundColor = theme.screenBackground
-        headerBar.backgroundColor = theme.headerBackground
-        headerBorder.backgroundColor = theme.headerBorderColor
         headerTitleLabel.textColor = theme.primaryText
         clockLabel.textColor = theme.primaryText
-        playStateIcon.textColor = theme == .darkPod ? UIColor(red: 0.30, green: 0.85, blue: 0.45, alpha: 1.0) : theme.highlightBottom
-        batteryView.layer.borderColor = (theme == .darkPod ? UIColor(white: 0.65, alpha: 1.0) : UIColor(white: 0.35, alpha: 1.0)).cgColor
+
+        if theme == .darkPod {
+            headerSubtleTint.colors = [UIColor(white: 1.0, alpha: 0.06).cgColor, UIColor.clear.cgColor]
+            layer.borderColor = UIColor(white: 0.28, alpha: 0.85).cgColor
+            // Ikon play & baterai berwarna putih bersih
+            playStateIcon.textColor = .white
+            batteryView.layer.borderColor = UIColor(white: 0.90, alpha: 1.0).cgColor
+            batteryCapView.backgroundColor = UIColor(white: 0.90, alpha: 1.0)
+            batteryFill.backgroundColor = .white
+        } else {
+            headerSubtleTint.colors = [UIColor(white: 0.0, alpha: 0.05).cgColor, UIColor.clear.cgColor]
+            layer.borderColor = UIColor(white: 0.45, alpha: 0.7).cgColor
+            playStateIcon.textColor = theme.primaryText
+            batteryView.layer.borderColor = theme.primaryText.withAlphaComponent(0.75).cgColor
+            batteryCapView.backgroundColor = theme.primaryText.withAlphaComponent(0.75)
+            batteryFill.backgroundColor = theme.primaryText
+        }
+
         coverTitleLabel.textColor = theme.primaryText
         coverArtistLabel.textColor = theme.secondaryText
         trackIndexLabel.textColor = theme.secondaryText
@@ -564,7 +567,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         remainingLabel.textColor = theme.primaryText
         progressTrack.backgroundColor = theme == .darkPod ? UIColor(white: 0.24, alpha: 1.0) : UIColor(white: 0.80, alpha: 1.0)
         progressTrack.layer.borderColor = (theme == .darkPod ? UIColor(white: 0.38, alpha: 1.0) : UIColor(white: 0.58, alpha: 1.0)).cgColor
-        progressFill.backgroundColor = theme.highlightTop
+        progressFill.backgroundColor = theme == .darkPod ? .white : theme.highlightTop
         tableView.reloadData()
         coverCollectionView.reloadData()
     }
@@ -621,7 +624,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             return cell.coverImageView.convert(cell.coverImageView.bounds, to: self)
         }
         let targetCenterX = bounds.width / 2.0
-        let targetTopY: CGFloat = 26.0 + 6.0 + 6.0
+        let targetTopY: CGFloat = 28.0 + 4.0 + 6.0
         return CGRect(x: targetCenterX - 50.0, y: targetTopY, width: 100.0, height: 100.0)
     }
 
@@ -668,7 +671,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             flyingCover.contentMode = .scaleAspectFill
             flyingCover.clipsToBounds = true
             flyingCover.layer.borderWidth = 1.0
-            flyingCover.layer.borderColor = UIColor(white: 0.45, alpha: 0.7).cgColor
+            flyingCover.layer.borderColor = UIColor(white: 0.45, alpha: 0.6).cgColor
             addSubview(flyingCover)
 
             let centerIndexPath = IndexPath(item: self.selectedIndex, section: 0)
@@ -778,6 +781,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         let track = coverTracks[index]
         coverTitleLabel.text = track.title
         coverArtistLabel.text = track.artist
+        onActiveCoverImageChanged?(track.artworkImage)
     }
 
     private func applyCoverFlowTransforms() {
@@ -838,6 +842,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         let nextImage = track.artworkImage ?? makeDefaultNoteArtwork()
         artworkView.image = nextImage
+        onActiveCoverImageChanged?(track.artworkImage)
 
         if animateFromCoverFlow && wasCoverFlow {
             layoutIfNeeded()
@@ -848,7 +853,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             flyingCover.contentMode = .scaleAspectFill
             flyingCover.clipsToBounds = true
             flyingCover.layer.borderWidth = 1.0
-            flyingCover.layer.borderColor = UIColor(white: 0.45, alpha: 0.7).cgColor
+            flyingCover.layer.borderColor = UIColor(white: 0.45, alpha: 0.6).cgColor
             addSubview(flyingCover)
 
             artworkView.alpha = 0.0
