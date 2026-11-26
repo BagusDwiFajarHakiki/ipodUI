@@ -34,7 +34,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         clickWheel.delegate = self
 
-        // Ketuk sampul tengah di menu Songs
         screenView.onCoverFlowTrackSelected = { [weak self] index in
             let songs = IPodMusicLibrary.shared.allTracks
             if songs.indices.contains(index) {
@@ -42,7 +41,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             }
         }
 
-        // Geser baris durasi lagu dengan jari di halaman Now Playing
         screenView.onSeekRatioChanged = { [weak self] ratio in
             self?.seekToRatio(ratio)
         }
@@ -73,19 +71,28 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         view.addSubview(clickWheel)
 
         let guide = view.safeAreaLayoutGuide
+        // Spacer transparan di bawah LCD agar Click Wheel selalu berada tepat di tengah vertikal area bawah (jarak atas == jarak bawah == jarak kiri/kanan)
+        let bottomAreaGuide = UILayoutGuide()
+        view.addLayoutGuide(bottomAreaGuide)
+
         NSLayoutConstraint.activate([
             screenView.topAnchor.constraint(equalTo: guide.topAnchor, constant: 12),
             screenView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
             screenView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
-            screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.88),
+            screenView.heightAnchor.constraint(equalTo: screenView.widthAnchor, multiplier: 0.78),
 
-            clickWheel.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -22),
-            clickWheel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.68),
+            bottomAreaGuide.topAnchor.constraint(equalTo: screenView.bottomAnchor),
+            bottomAreaGuide.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
+            bottomAreaGuide.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bottomAreaGuide.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+
+            clickWheel.centerXAnchor.constraint(equalTo: bottomAreaGuide.centerXAnchor),
+            clickWheel.centerYAnchor.constraint(equalTo: bottomAreaGuide.centerYAnchor),
+            clickWheel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.70),
             clickWheel.heightAnchor.constraint(equalTo: clickWheel.widthAnchor)
         ])
     }
-    
+
     private func setupAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
@@ -97,7 +104,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
-    // MARK: - Menu Navigation Engine (Music hanya menampilkan Playlists & Songs)
+    // MARK: - Menu Navigation Engine
     private func rows(for node: IPodMenuNode) -> (title: String, items: [IPodMenuRow]) {
         switch node {
         case .root:
@@ -242,7 +249,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     func clickWheelDidPressMenu() {
         if isNowPlayingActive {
-            // Keluar dari halaman putar dengan animasi Cover Flow menuju ke barisan lagu aktif
             let activeIndex: Int
             if let top = menuStack.last, case .allSongs = top.node,
                currentQueue.indices.contains(currentTrackIndex),
@@ -279,7 +285,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             } else if idx == 2 {
                 pushMenu(.settings)
             } else if idx == 3, !currentQueue.isEmpty {
-                openNowPlayingScreen()
+                openNowPlayingScreen(animateFromCoverFlow: false)
             }
 
         case .music:
@@ -337,13 +343,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     // MARK: - Native AVPlayer Audio Engine
     private func startQueue(tracks: [IPodTrack], at index: Int) {
         guard tracks.indices.contains(index) else { return }
+        let wasCoverFlow = screenView.isCoverFlowActive
         if !menuStack.isEmpty {
             menuStack[menuStack.count - 1].selectedIndex = index
         }
 
         let targetTrack = tracks[index]
 
-        // Jika lagu yang diklik adalah lagu yang sedang aktif, langsung masuk ke Now Playing tanpa mengulang lagu dari awal
         if currentQueue.indices.contains(currentTrackIndex),
            currentQueue[currentTrackIndex].id == targetTrack.id,
            player != nil {
@@ -352,17 +358,17 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 isPlaying = true
                 screenView.updatePlayState(isPlaying: true)
             }
-            openNowPlayingScreen()
+            openNowPlayingScreen(animateFromCoverFlow: wasCoverFlow)
             return
         }
 
         currentQueue = tracks
         currentTrackIndex = index
         playTrack(at: index, transitionDirection: 0)
-        openNowPlayingScreen()
+        openNowPlayingScreen(animateFromCoverFlow: wasCoverFlow)
     }
 
-    private func openNowPlayingScreen(transitionDirection: Int = 0) {
+    private func openNowPlayingScreen(transitionDirection: Int = 0, animateFromCoverFlow: Bool = false) {
         guard currentQueue.indices.contains(currentTrackIndex) else { return }
         isNowPlayingActive = true
         let track = currentQueue[currentTrackIndex]
@@ -370,7 +376,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             track: track,
             index: currentTrackIndex,
             total: currentQueue.count,
-            transitionDirection: transitionDirection
+            transitionDirection: transitionDirection,
+            animateFromCoverFlow: animateFromCoverFlow
         )
     }
 
@@ -395,7 +402,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 track: track,
                 index: index,
                 total: currentQueue.count,
-                transitionDirection: transitionDirection
+                transitionDirection: transitionDirection,
+                animateFromCoverFlow: false
             )
         }
 

@@ -103,7 +103,7 @@ class IPodMenuCell: UITableViewCell {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-// MARK: - Cover Flow Cell (Ukuran Sampul Lebih Besar 108x108 + Refleksi Memanjang)
+// MARK: - Cover Flow Cell (100x100 + Refleksi Memanjang ke Belakang Judul)
 class IPodCoverFlowCell: UICollectionViewCell {
     let coverImageView = UIImageView()
     let reflectionImageView = UIImageView()
@@ -139,13 +139,13 @@ class IPodCoverFlowCell: UICollectionViewCell {
         NSLayoutConstraint.activate([
             coverImageView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
             coverImageView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
-            coverImageView.widthAnchor.constraint(equalToConstant: 108),
-            coverImageView.heightAnchor.constraint(equalToConstant: 108),
+            coverImageView.widthAnchor.constraint(equalToConstant: 100),
+            coverImageView.heightAnchor.constraint(equalToConstant: 100),
 
             reflectionImageView.topAnchor.constraint(equalTo: coverImageView.bottomAnchor, constant: 1),
             reflectionImageView.centerXAnchor.constraint(equalTo: coverImageView.centerXAnchor),
-            reflectionImageView.widthAnchor.constraint(equalToConstant: 108),
-            reflectionImageView.heightAnchor.constraint(equalToConstant: 82)
+            reflectionImageView.widthAnchor.constraint(equalToConstant: 100),
+            reflectionImageView.heightAnchor.constraint(equalToConstant: 76)
         ])
     }
 
@@ -190,8 +190,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let coverArtistLabel = UILabel()
     private var coverTracks: [IPodTrack] = []
     private(set) var isCoverFlowActive = false
-    private let coverItemWidth: CGFloat = 112
-    private let coverItemSpacing: CGFloat = -68 // Stride 44pt agar 7 sampul (3 kiri, 1 tengah, 3 kanan) rapat proporsional
+    private let coverItemWidth: CGFloat = 104
+    private let coverItemSpacing: CGFloat = -60 // Stride 44pt agar 7 sampul tersusun rapat
     private var displayLink: CADisplayLink?
     private var targetCoverOffsetX: CGFloat = 0
 
@@ -272,7 +272,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         let flowLayout = UICollectionViewFlowLayout()
         flowLayout.scrollDirection = .horizontal
         flowLayout.minimumLineSpacing = coverItemSpacing
-        flowLayout.itemSize = CGSize(width: coverItemWidth, height: 204)
+        flowLayout.itemSize = CGSize(width: coverItemWidth, height: 184)
 
         coverCollectionView = UICollectionView(frame: .zero, collectionViewLayout: flowLayout)
         coverCollectionView.dataSource = self
@@ -284,7 +284,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverCollectionView.translatesAutoresizingMaskIntoConstraints = false
         coverFlowContainer.addSubview(coverCollectionView)
 
-        // Judul & Artis berada lebih ke atas di atas area refleksi bawah agar tidak mepet ke tepi LCD
         coverTitleLabel.font = UIFont.systemFont(ofSize: 14, weight: .bold)
         coverTitleLabel.textAlignment = .center
         coverTitleLabel.lineBreakMode = .byTruncatingTail
@@ -413,16 +412,16 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             coverFlowContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
             coverFlowContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            coverCollectionView.topAnchor.constraint(equalTo: coverFlowContainer.topAnchor, constant: 8),
+            coverCollectionView.topAnchor.constraint(equalTo: coverFlowContainer.topAnchor, constant: 6),
             coverCollectionView.leadingAnchor.constraint(equalTo: coverFlowContainer.leadingAnchor),
             coverCollectionView.trailingAnchor.constraint(equalTo: coverFlowContainer.trailingAnchor),
             coverCollectionView.bottomAnchor.constraint(equalTo: coverFlowContainer.bottomAnchor),
 
-            coverArtistLabel.bottomAnchor.constraint(equalTo: coverFlowContainer.bottomAnchor, constant: -24),
+            coverArtistLabel.bottomAnchor.constraint(equalTo: coverFlowContainer.bottomAnchor, constant: -16),
             coverArtistLabel.leadingAnchor.constraint(equalTo: coverFlowContainer.leadingAnchor, constant: 14),
             coverArtistLabel.trailingAnchor.constraint(equalTo: coverFlowContainer.trailingAnchor, constant: -14),
 
-            coverTitleLabel.bottomAnchor.constraint(equalTo: coverArtistLabel.topAnchor, constant: -3),
+            coverTitleLabel.bottomAnchor.constraint(equalTo: coverArtistLabel.topAnchor, constant: -2),
             coverTitleLabel.leadingAnchor.constraint(equalTo: coverArtistLabel.leadingAnchor),
             coverTitleLabel.trailingAnchor.constraint(equalTo: coverArtistLabel.trailingAnchor),
 
@@ -431,13 +430,13 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             nowPlayingContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
             nowPlayingContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            trackIndexLabel.topAnchor.constraint(equalTo: nowPlayingContainer.topAnchor, constant: 10),
+            trackIndexLabel.topAnchor.constraint(equalTo: nowPlayingContainer.topAnchor, constant: 8),
             trackIndexLabel.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 12),
 
-            artworkView.topAnchor.constraint(equalTo: trackIndexLabel.bottomAnchor, constant: 10),
+            artworkView.topAnchor.constraint(equalTo: trackIndexLabel.bottomAnchor, constant: 8),
             artworkView.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 12),
-            artworkView.widthAnchor.constraint(equalToConstant: 108),
-            artworkView.heightAnchor.constraint(equalToConstant: 108),
+            artworkView.widthAnchor.constraint(equalToConstant: 100),
+            artworkView.heightAnchor.constraint(equalToConstant: 100),
 
             trackTitleLabel.topAnchor.constraint(equalTo: artworkView.topAnchor, constant: 4),
             trackTitleLabel.leadingAnchor.constraint(equalTo: artworkView.trailingAnchor, constant: 10),
@@ -472,10 +471,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             progressKnob.heightAnchor.constraint(equalToConstant: 12),
 
             elapsedLabel.leadingAnchor.constraint(equalTo: progressTouchArea.leadingAnchor),
-            elapsedLabel.bottomAnchor.constraint(equalTo: nowPlayingContainer.bottomAnchor, constant: -10),
+            elapsedLabel.bottomAnchor.constraint(equalTo: nowPlayingContainer.bottomAnchor, constant: -8),
 
             remainingLabel.trailingAnchor.constraint(equalTo: progressTouchArea.trailingAnchor),
-            remainingLabel.bottomAnchor.constraint(equalTo: nowPlayingContainer.bottomAnchor, constant: -10)
+            remainingLabel.bottomAnchor.constraint(equalTo: nowPlayingContainer.bottomAnchor, constant: -8)
         ])
     }
 
@@ -554,6 +553,16 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
     }
 
+    private func currentCoverFlowCenterFrame() -> CGRect {
+        let centerIndexPath = IndexPath(item: self.selectedIndex, section: 0)
+        if let cell = coverCollectionView.cellForItem(at: centerIndexPath) as? IPodCoverFlowCell {
+            return cell.coverImageView.convert(cell.coverImageView.bounds, to: self)
+        }
+        let targetCenterX = bounds.width / 2.0
+        let targetTopY: CGFloat = 26.0 + 6.0 + 6.0
+        return CGRect(x: targetCenterX - 50.0, y: targetTopY, width: 100.0, height: 100.0)
+    }
+
     func showSongsCoverFlow(title: String, tracks: [IPodTrack], selectedIndex: Int = 0, animateFromNowPlaying: Bool = false) {
         stopSmoothScrollDisplayLink()
         let wasNowPlaying = !nowPlayingContainer.isHidden
@@ -576,7 +585,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverCollectionView.reloadData()
         coverCollectionView.layoutIfNeeded()
 
-        let stepStride = coverItemWidth + coverItemSpacing // 112 + (-68) = 44pt
+        let stepStride = coverItemWidth + coverItemSpacing
         targetCoverOffsetX = CGFloat(self.selectedIndex) * stepStride
         coverCollectionView.contentOffset = CGPoint(x: targetCoverOffsetX, y: 0)
         coverCollectionView.layoutIfNeeded()
@@ -589,18 +598,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             coverArtistLabel.text = "Sinkronkan lagu ke Music/Documents"
         }
 
-        // Hitung frame eksak sampul tengah di barisan Cover Flow agar pendaratan seamless tanpa turun/glitch
         if animateFromNowPlaying && wasNowPlaying && !tracks.isEmpty {
-            let centerIndexPath = IndexPath(item: self.selectedIndex, section: 0)
-            let centerCell = coverCollectionView.cellForItem(at: centerIndexPath) as? IPodCoverFlowCell
-            let exactTargetFrame: CGRect
-            if let cell = centerCell {
-                exactTargetFrame = cell.coverImageView.convert(cell.coverImageView.bounds, to: self)
-            } else {
-                let targetCenterX = bounds.width / 2.0
-                let targetTopY: CGFloat = 26.0 + 8.0 + 6.0
-                exactTargetFrame = CGRect(x: targetCenterX - 54.0, y: targetTopY, width: 108.0, height: 108.0)
-            }
+            let exactTargetFrame = currentCoverFlowCenterFrame()
 
             let flyingCover = UIImageView(frame: sourceArtworkFrame)
             flyingCover.image = sourceArtworkImage ?? makeDefaultNoteArtwork()
@@ -610,6 +609,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             flyingCover.layer.borderColor = UIColor(white: 0.72, alpha: 1.0).cgColor
             addSubview(flyingCover)
 
+            let centerIndexPath = IndexPath(item: self.selectedIndex, section: 0)
+            let centerCell = coverCollectionView.cellForItem(at: centerIndexPath)
             centerCell?.alpha = 0.0
             coverCollectionView.alpha = 0.0
             coverTitleLabel.alpha = 0.0
@@ -634,7 +635,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
     }
 
-    // CADisplayLink 60fps: mengikuti putaran wheel secepat apa pun tanpa macet, lalu memberi efek memantul halus pada skala sampul saat berhenti
+    // CADisplayLink 60fps: meluncur mengikuti putaran roda tanpa macet
     private func startSmoothScrollDisplayLink() {
         guard displayLink == nil else { return }
         let link = CADisplayLink(target: self, selector: #selector(stepSmoothCoverScroll))
@@ -665,13 +666,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
     }
 
-    // Efek membal halus (spring settle) pada sampul tengah seperti di video saat berhenti di pilihan lagu
     private func triggerCenterCoverSpringSettle() {
         let indexPath = IndexPath(item: selectedIndex, section: 0)
         guard let cell = coverCollectionView.cellForItem(at: indexPath) as? IPodCoverFlowCell else { return }
         UIView.animate(withDuration: 0.12, delay: 0, options: [.curveEaseOut, .allowUserInteraction], animations: {
-            cell.coverImageView.transform = CGAffineTransform(scaleX: 1.055, y: 1.055)
-            cell.reflectionImageView.transform = CGAffineTransform(scaleX: 1.055, y: -1.055)
+            cell.coverImageView.transform = CGAffineTransform(scaleX: 1.05, y: 1.05)
+            cell.reflectionImageView.transform = CGAffineTransform(scaleX: 1.05, y: -1.05)
         }, completion: { _ in
             UIView.animate(
                 withDuration: 0.22,
@@ -731,7 +731,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             let sign: CGFloat = slotOffset >= 0 ? 1.0 : -1.0
 
             var transform = CATransform3DIdentity
-            transform.m34 = -1.0 / 380.0
+            transform.m34 = -1.0 / 360.0
 
             let angle: CGFloat
             if absSlot < 0.20 {
@@ -744,9 +744,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
             let pullIn: CGFloat
             if absSlot <= 1.0 {
-                pullIn = sign * absSlot * 18.0
+                pullIn = sign * absSlot * 16.0
             } else {
-                pullIn = sign * (18.0 + (absSlot - 1.0) * 7.5)
+                pullIn = sign * (16.0 + (absSlot - 1.0) * 6.5)
             }
 
             transform = CATransform3DTranslate(transform, pullIn, 0, -absSlot * 24.0)
@@ -759,7 +759,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
     }
 
-    func showNowPlaying(track: IPodTrack, index: Int, total: Int, transitionDirection: Int = 0) {
+    func showNowPlaying(track: IPodTrack, index: Int, total: Int, transitionDirection: Int = 0, animateFromCoverFlow: Bool = false) {
+        let wasCoverFlow = isCoverFlowActive && !coverFlowContainer.isHidden
+        let sourceCoverFrame = wasCoverFlow ? currentCoverFlowCenterFrame() : .zero
+
         stopSmoothScrollDisplayLink()
         headerTitleLabel.text = "Now Playing"
         tableView.isHidden = true
@@ -773,6 +776,52 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         trackAlbumLabel.text = track.album
 
         let nextImage = track.artworkImage ?? makeDefaultNoteArtwork()
+        artworkView.image = nextImage
+
+        // Animasi sampul Cover Flow melayang turun masuk ke halaman Now Playing saat lagu dipilih
+        if animateFromCoverFlow && wasCoverFlow {
+            layoutIfNeeded()
+            let exactTargetFrame = artworkView.convert(artworkView.bounds, to: self)
+
+            let flyingCover = UIImageView(frame: sourceCoverFrame)
+            flyingCover.image = nextImage
+            flyingCover.contentMode = .scaleAspectFill
+            flyingCover.clipsToBounds = true
+            flyingCover.layer.borderWidth = 1.0
+            flyingCover.layer.borderColor = UIColor(white: 0.65, alpha: 1.0).cgColor
+            addSubview(flyingCover)
+
+            artworkView.alpha = 0.0
+            trackIndexLabel.alpha = 0.0
+            trackTitleLabel.alpha = 0.0
+            trackArtistLabel.alpha = 0.0
+            trackAlbumLabel.alpha = 0.0
+            progressTouchArea.alpha = 0.0
+            elapsedLabel.alpha = 0.0
+            remainingLabel.alpha = 0.0
+
+            UIView.animate(
+                withDuration: 0.30,
+                delay: 0,
+                options: [.curveEaseOut],
+                animations: {
+                    flyingCover.frame = exactTargetFrame
+                    self.trackIndexLabel.alpha = 1.0
+                    self.trackTitleLabel.alpha = 1.0
+                    self.trackArtistLabel.alpha = 1.0
+                    self.trackAlbumLabel.alpha = 1.0
+                    self.progressTouchArea.alpha = 1.0
+                    self.elapsedLabel.alpha = 1.0
+                    self.remainingLabel.alpha = 1.0
+                },
+                completion: { _ in
+                    self.artworkView.alpha = 1.0
+                    flyingCover.removeFromSuperview()
+                }
+            )
+            lastDisplayedTrackId = track.id
+            return
+        }
 
         if transitionDirection != 0 && lastDisplayedTrackId != track.id {
             let dir: CGFloat = transitionDirection > 0 ? 1.0 : -1.0
@@ -782,7 +831,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             startTransform = CATransform3DRotate(startTransform, -dir * (.pi / 3.0), 0, 1, 0)
             startTransform = CATransform3DScale(startTransform, 0.84, 0.84, 1.0)
 
-            artworkView.image = nextImage
             artworkView.layer.transform = startTransform
             artworkView.alpha = 0.55
 
@@ -793,7 +841,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         } else {
             artworkView.layer.transform = CATransform3DIdentity
             artworkView.alpha = 1.0
-            artworkView.image = nextImage
         }
 
         lastDisplayedTrackId = track.id
