@@ -7,19 +7,64 @@ enum IPodStreamResolutionResult {
     case failed(reason: String)
 }
 
-private struct ITunesSearchResponse: Codable {
-    let resultCount: Int?
-    let results: [ITunesSongItem]
+private struct ArchiveSearchResponse: Codable {
+    let response: ArchiveResponseBody
 }
 
-private struct ITunesSongItem: Codable {
-    let trackId: Int?
-    let trackName: String?
-    let artistName: String?
-    let collectionName: String?
-    let previewUrl: String?
-    let artworkUrl100: String?
-    let trackTimeMillis: Int?
+private struct ArchiveResponseBody: Codable {
+    let docs: [ArchiveDocItem]
+}
+
+private struct ArchiveDocItem: Codable {
+    let identifier: String
+    let title: String?
+    let creator: ArchiveFlexibleString?
+    let collection: ArchiveFlexibleString?
+}
+
+private enum ArchiveFlexibleString: Codable {
+    case single(String)
+    case multiple([String])
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let str = try? container.decode(String.self) {
+            self = .single(str)
+        } else if let arr = try? container.decode([String].self) {
+            self = .multiple(arr)
+        } else {
+            self = .single("")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .single(let str):
+            try container.encode(str)
+        case .multiple(let arr):
+            try container.encode(arr)
+        }
+    }
+
+    var primaryValue: String {
+        switch self {
+        case .single(let str):
+            return str
+        case .multiple(let arr):
+            return arr.first ?? ""
+        }
+    }
+}
+
+private struct ArchiveMetadataResponse: Codable {
+    let files: [ArchiveFileItem]?
+}
+
+private struct ArchiveFileItem: Codable {
+    let name: String?
+    let format: String?
+    let length: String?
 }
 
 final class IPodStreamingLibrary {
@@ -27,21 +72,21 @@ final class IPodStreamingLibrary {
     static let pageSize: Int = 50
 
     private(set) var allStreamingTracks: [IPodTrack] = []
-    private var streamURLByTrackId: [String: URL] = [:]
-    private var artworkURLByTrackId: [String: String] = [:]
+    private var identifierByTrackId: [String: String] = [:]
+    private var resolvedAudioURLCache: [String: URL] = [:]
     private var artworkCache: [String: UIImage] = [:]
 
-    private let searchTerms = [
-        "tulus",
-        "nadin amizah",
-        "arctic monkeys",
-        "daft punk",
-        "lofi hip hop"
+    private let searchQueries = [
+        "mediatype:audio AND (format:MP3 OR format:VBR\\ MP3)",
+        "mediatype:audio AND collection:etree",
+        "mediatype:audio AND collection:netlabels",
+        "mediatype:audio AND subject:electronic",
+        "mediatype:audio AND subject:ambient"
     ]
-    private var termCursor: Int = 0
+    private var queryIndex: Int = 0
 
     private init() {
-        fetchTracksFromITunes(reshuffle: false) { _ in }
+        fetchFullTracksFromArchive(reshuffle: false) { _ in }
     }
 
     private func makeTrack(
@@ -66,13 +111,11 @@ final class IPodStreamingLibrary {
     }
 
     func refreshTracks(completion: @escaping (Bool) -> Void) {
-        fetchTracksFromITunes(reshuffle: true, completion: completion)
+        fetchFullTracksFromArchive(reshuffle: true, completion: completion)
     }
 
     func invalidateCachedURL(for track: IPodTrack) {
-        if let url = streamURLByTrackId[track.id] {
-            streamURLByTrackId[track.id] = url
-        }
+        resolvedAudioURLCache.removeValue(forKey: track.id)
     }
 
     func tracksPage(pageIndex: Int) -> (tracks: [IPodTrack], currentPage: Int, totalPages: Int, hasNextPage: Bool) {
@@ -128,26 +171,82 @@ final class IPodStreamingLibrary {
     }
 
     func resolvePlayableAudio(for track: IPodTrack, forceRefresh: Bool = false, completion: @escaping (IPodStreamResolutionResult) -> Void) {
-        if let url = streamURLByTrackId[track.id] ?? track.assetURL {
-            completion(.playable(url))
+        if !forceRefresh, let cached = resolvedAudioURLCache[track.id] {
+            completion(.playable(cached))
             return
         }
-        completion(.failed(reason: "Preview URL tidak tersedia"))
+
+        guard let identifier = identifierByTrackId[track.id], !identifier.isEmpty else {
+            completion(.failed(reason: "Identifier audio kosong"))
+            return
+        }
+
+        let encodedId = identifier.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? identifier
+        guard let metaURL = URL(string: "https://archive.org/metadata/\(encodedId)") else {
+            completion(.failed(reason: "URL metadata tidak valid"))
+            return
+        }
+
+        var request = URLRequest(url: metaURL)
+        request.timeoutInterval = 10.0
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self else { return }
+            if let err = error {
+                DispatchQueue.main.async {
+                    completion(.failed(reason: "Net: \(err.localizedDescription)"))
+                }
+                return
+            }
+
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard let data = data, status == 200,
+                  let meta = try? JSONDecoder().decode(ArchiveMetadataResponse.self, from: data),
+                  let files = meta.files else {
+                DispatchQueue.main.async {
+                    completion(.failed(reason: "Metadata HTTP \(status)"))
+                }
+                return
+            }
+
+            let audioCandidate = files.first { file in
+                guard let name = file.name?.lowercased(), !name.isEmpty else { return false }
+                return name.hasSuffix(".mp3") || name.hasSuffix(".m4a") || name.hasSuffix(".ogg")
+            }
+
+            guard let fileName = audioCandidate?.name,
+                  let encodedFile = fileName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                  let audioURL = URL(string: "https://archive.org/download/\(encodedId)/\(encodedFile)") else {
+                DispatchQueue.main.async {
+                    completion(.failed(reason: "File audio penuh tidak ditemukan"))
+                }
+                return
+            }
+
+            self.resolvedAudioURLCache[track.id] = audioURL
+            DispatchQueue.main.async {
+                completion(.playable(audioURL))
+            }
+        }.resume()
     }
 
-    private func fetchTracksFromITunes(reshuffle: Bool, completion: @escaping (Bool) -> Void) {
-        let term = searchTerms[termCursor % searchTerms.count]
-        termCursor += 1
+    private func fetchFullTracksFromArchive(reshuffle: Bool, completion: @escaping (Bool) -> Void) {
+        let q = searchQueries[queryIndex % searchQueries.count]
+        queryIndex += 1
 
-        guard var comps = URLComponents(string: "https://itunes.apple.com/search") else {
+        guard var comps = URLComponents(string: "https://archive.org/advancedsearch.php") else {
             DispatchQueue.main.async { completion(false) }
             return
         }
         comps.queryItems = [
-            URLQueryItem(name: "term", value: term),
-            URLQueryItem(name: "media", value: "music"),
-            URLQueryItem(name: "entity", value: "song"),
-            URLQueryItem(name: "limit", value: "50")
+            URLQueryItem(name: "q", value: q),
+            URLQueryItem(name: "fl[]", value: "identifier"),
+            URLQueryItem(name: "fl[]", value: "title"),
+            URLQueryItem(name: "fl[]", value: "creator"),
+            URLQueryItem(name: "fl[]", value: "collection"),
+            URLQueryItem(name: "rows", value: "50"),
+            URLQueryItem(name: "page", value: String((queryIndex % 5) + 1)),
+            URLQueryItem(name: "output", value: "json")
         ]
 
         guard let url = comps.url else {
@@ -160,69 +259,44 @@ final class IPodStreamingLibrary {
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
-            if let err = error {
-                DispatchQueue.main.async {
-                    completion(false)
-                }
-                print("iTunes API error: \(err.localizedDescription)")
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard error == nil, let data = data, code == 200,
+                  let decoded = try? JSONDecoder().decode(ArchiveSearchResponse.self, from: data) else {
+                DispatchQueue.main.async { completion(false) }
                 return
             }
 
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            guard let data = data, status == 200,
-                  let decoded = try? JSONDecoder().decode(ITunesSearchResponse.self, from: data) else {
-                DispatchQueue.main.async {
-                    completion(false)
-                }
-                return
-            }
+            var built: [IPodTrack] = []
+            var idMap: [String: String] = [:]
 
-            var builtTracks: [IPodTrack] = []
-            var urlMap: [String: URL] = [:]
-            var artMap: [String: String] = [:]
+            for (idx, doc) in decoded.response.docs.enumerated() {
+                let rawTitle = (doc.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let cleanTitle = rawTitle.isEmpty ? doc.identifier : rawTitle
+                let creatorStr = doc.creator?.primaryValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let artist = creatorStr.isEmpty ? "Archive Artist" : creatorStr
+                let albumStr = doc.collection?.primaryValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let album = albumStr.isEmpty ? "Full Audio" : albumStr
 
-            for (idx, item) in decoded.results.enumerated() {
-                guard let title = item.trackName, !title.isEmpty,
-                      let artist = item.artistName, !artist.isEmpty,
-                      let previewStr = item.previewUrl,
-                      let previewURL = URL(string: previewStr) else {
-                    continue
-                }
-
-                let rawId = item.trackId.map { String($0) } ?? "\(idx)_\(title.hashValue)"
-                let uniqueId = "stream_\(rawId)_\(idx)"
-                let album = (item.collectionName?.isEmpty == false) ? item.collectionName! : "Single"
-                let durationSec: TimeInterval = {
-                    if let ms = item.trackTimeMillis, ms > 0 {
-                        return TimeInterval(ms) / 1000.0
-                    }
-                    return 30.0
-                }()
-
-                let art = self.placeholderArtwork(seed: uniqueId)
+                let trackId = "stream_\(doc.identifier)_\(idx)"
+                let art = self.placeholderArtwork(seed: doc.identifier)
                 let track = self.makeTrack(
-                    id: uniqueId,
-                    title: title,
+                    id: trackId,
+                    title: cleanTitle,
                     artist: artist,
                     album: album,
-                    duration: durationSec,
-                    assetURL: previewURL,
+                    duration: 210,
+                    assetURL: nil,
                     artworkImage: art
                 )
-
-                builtTracks.append(track)
-                urlMap[uniqueId] = previewURL
-                if let artUrl = item.artworkUrl100, !artUrl.isEmpty {
-                    artMap[uniqueId] = artUrl
-                }
+                built.append(track)
+                idMap[trackId] = doc.identifier
             }
 
             DispatchQueue.main.async {
-                self.streamURLByTrackId = urlMap
-                self.artworkURLByTrackId = artMap
-                self.allStreamingTracks = reshuffle ? builtTracks.shuffled() : builtTracks
+                self.identifierByTrackId = idMap
+                self.allStreamingTracks = reshuffle ? built.shuffled() : built
                 self.loadLowResThumbnailsAsync(for: self.allStreamingTracks)
-                completion(!builtTracks.isEmpty)
+                completion(!built.isEmpty)
             }
         }.resume()
     }
@@ -244,16 +318,17 @@ final class IPodStreamingLibrary {
 
     private func loadLowResThumbnailsAsync(for tracks: [IPodTrack]) {
         for (idx, track) in tracks.enumerated() {
-            guard let artStr = artworkURLByTrackId[track.id],
-                  let url = URL(string: artStr) else { continue }
-            if let cached = artworkCache[artStr] {
+            guard let identifier = identifierByTrackId[track.id],
+                  let encodedId = identifier.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                  let url = URL(string: "https://archive.org/services/img/\(encodedId)") else { continue }
+            if let cached = artworkCache[identifier] {
                 replaceTrackArtwork(at: idx, expectedId: track.id, image: cached)
                 continue
             }
             URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
                 guard let self = self, let data = data, let rawImg = UIImage(data: data) else { return }
                 let lowRes = self.downsampleImage(rawImg, targetSide: 96)
-                self.artworkCache[artStr] = lowRes
+                self.artworkCache[identifier] = lowRes
                 DispatchQueue.main.async {
                     self.replaceTrackArtwork(at: idx, expectedId: track.id, image: lowRes)
                 }
@@ -270,7 +345,7 @@ final class IPodStreamingLibrary {
     }
 
     private func placeholderArtwork(seed: String) -> UIImage? {
-        if let cached = artworkCache[seed] {
+        if let cached = artworkCache["ph_\(seed)"] {
             return cached
         }
         let hue = CGFloat(abs(seed.hashValue) % 360) / 360.0
@@ -294,7 +369,7 @@ final class IPodStreamingLibrary {
 
         let img = UIGraphicsGetImageFromCurrentImageContext()
         if let img = img {
-            artworkCache[seed] = img
+            artworkCache["ph_\(seed)"] = img
         }
         return img
     }
