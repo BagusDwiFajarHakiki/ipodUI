@@ -230,8 +230,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             ambientGlowImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
             mirrorContainerView.topAnchor.constraint(equalTo: screenView.bottomAnchor),
-            mirrorContainerView.leadingAnchor.constraint(equalTo: screenView.leadingAnchor),
-            mirrorContainerView.trailingAnchor.constraint(equalTo: screenView.trailingAnchor),
+            mirrorContainerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            mirrorContainerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             mirrorContainerView.bottomAnchor.constraint(equalTo: clickWheel.centerYAnchor, constant: 22),
 
             mirrorReflectionImageView.topAnchor.constraint(equalTo: mirrorContainerView.topAnchor),
@@ -286,6 +286,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         defer { UIGraphicsEndImageContext() }
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
+        let lcdSideMargin: CGFloat = 14.0
+        let leftEdge = min(0.20, lcdSideMargin / w)
+        let leftMid = leftEdge * 0.45
+        let rightEdge = max(0.80, (w - lcdSideMargin) / w)
+        let rightMid = 1.0 - leftMid
+
         let hColors = [
             UIColor.white.withAlphaComponent(0.0).cgColor,
             UIColor.white.withAlphaComponent(0.55).cgColor,
@@ -294,7 +300,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             UIColor.white.withAlphaComponent(0.55).cgColor,
             UIColor.white.withAlphaComponent(0.0).cgColor
         ] as CFArray
-        let hLocations: [CGFloat] = [0.0, 0.02, 0.07, 0.93, 0.98, 1.0]
+        let hLocations: [CGFloat] = [0.0, leftMid, leftEdge, rightEdge, rightMid, 1.0]
 
         if let hGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hColors, locations: hLocations) {
             ctx.drawLinearGradient(
