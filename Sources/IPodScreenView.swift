@@ -1178,7 +1178,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         case .search:
             if let q = activeSearchQuery, !q.isEmpty {
                 coverTitleLabel.text = q
-                coverArtistLabel.text = "Judul, artis, atau album"
+                coverArtistLabel.text = "Hasil pencarian"
             } else {
                 coverTitleLabel.text = "Cari Lagu"
                 coverArtistLabel.text = "Judul, artis, atau album"
