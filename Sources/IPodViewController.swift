@@ -7,10 +7,6 @@ enum IPodMenuNode {
     case music
     case playlists
     case playlistTracks(IPodPlaylistGroup)
-    case artists
-    case artistTracks(String, [IPodTrack])
-    case albums
-    case albumTracks(String, [IPodTrack])
     case allSongs
     case settings
 }
@@ -37,12 +33,20 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         setupRemoteCommands()
 
         clickWheel.delegate = self
+
+        // Ketuk sampul tengah di menu Songs
         screenView.onCoverFlowTrackSelected = { [weak self] index in
             let songs = IPodMusicLibrary.shared.allTracks
             if songs.indices.contains(index) {
                 self?.startQueue(tracks: songs, at: index)
             }
         }
+
+        // Geser baris durasi lagu dengan jari di halaman Now Playing
+        screenView.onSeekRatioChanged = { [weak self] ratio in
+            self?.seekToRatio(ratio)
+        }
+
         renderTopMenu(restoreIndex: 0)
 
         IPodMusicLibrary.shared.requestAccessAndLoad { [weak self] in
@@ -93,7 +97,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
-    // MARK: - Menu Navigation Engine
+    // MARK: - Menu Navigation Engine (Music hanya menampilkan Playlists & Songs)
     private func rows(for node: IPodMenuNode) -> (title: String, items: [IPodMenuRow]) {
         switch node {
         case .root:
@@ -110,40 +114,20 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         case .music:
             return ("Music", [
                 IPodMenuRow(title: "Playlists", hasSubmenu: true),
-                IPodMenuRow(title: "Artists", hasSubmenu: true),
-                IPodMenuRow(title: "Albums", hasSubmenu: true),
                 IPodMenuRow(title: "Songs", hasSubmenu: true)
             ])
 
         case .playlists:
+            var items = [IPodMenuRow(title: "+ New Playlist...", hasSubmenu: false)]
             let pls = IPodMusicLibrary.shared.playlists
-            if pls.isEmpty {
-                return ("Playlists", [IPodMenuRow(title: "Tidak ada playlist", hasSubmenu: false)])
-            }
-            return ("Playlists", pls.map { IPodMenuRow(title: "\($0.name) (\($0.tracks.count))", hasSubmenu: true) })
+            items.append(contentsOf: pls.map { IPodMenuRow(title: "\($0.name) (\($0.tracks.count))", hasSubmenu: true) })
+            return ("Playlists", items)
 
         case .playlistTracks(let group):
+            if group.tracks.isEmpty {
+                return (group.name, [IPodMenuRow(title: "Playlist kosong", hasSubmenu: false)])
+            }
             return (group.name, group.tracks.map { IPodMenuRow(title: $0.title, hasSubmenu: false) })
-
-        case .artists:
-            let keys = IPodMusicLibrary.shared.artists.keys.sorted()
-            if keys.isEmpty {
-                return ("Artists", [IPodMenuRow(title: "Pustaka kosong", hasSubmenu: false)])
-            }
-            return ("Artists", keys.map { IPodMenuRow(title: $0, hasSubmenu: true) })
-
-        case .artistTracks(let artist, let tracks):
-            return (artist, tracks.map { IPodMenuRow(title: $0.title, hasSubmenu: false) })
-
-        case .albums:
-            let keys = IPodMusicLibrary.shared.albums.keys.sorted()
-            if keys.isEmpty {
-                return ("Albums", [IPodMenuRow(title: "Pustaka kosong", hasSubmenu: false)])
-            }
-            return ("Albums", keys.map { IPodMenuRow(title: $0, hasSubmenu: true) })
-
-        case .albumTracks(let album, let tracks):
-            return (album, tracks.map { IPodMenuRow(title: $0.title, hasSubmenu: false) })
 
         case .allSongs:
             let songs = IPodMusicLibrary.shared.allTracks
@@ -161,13 +145,18 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
-    private func renderTopMenu(restoreIndex: Int) {
+    private func renderTopMenu(restoreIndex: Int, animateFromNowPlaying: Bool = false) {
         guard let top = menuStack.last else { return }
         isNowPlayingActive = false
 
         if case .allSongs = top.node {
             let songs = IPodMusicLibrary.shared.allTracks
-            screenView.showSongsCoverFlow(title: "Songs", tracks: songs, selectedIndex: restoreIndex)
+            screenView.showSongsCoverFlow(
+                title: "Songs",
+                tracks: songs,
+                selectedIndex: restoreIndex,
+                animateFromNowPlaying: animateFromNowPlaying
+            )
             return
         }
 
@@ -183,6 +172,63 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         renderTopMenu(restoreIndex: 0)
     }
 
+    // MARK: - Fitur Buat Playlist Baru Sinkron ke Aplikasi Music Bawaan
+    private func presentCreatePlaylistDialog() {
+        let alert = UIAlertController(
+            title: "New Playlist",
+            message: "Masukkan nama playlist baru (sinkron ke aplikasi Music):",
+            preferredStyle: .alert
+        )
+        alert.addTextField { tf in
+            tf.placeholder = "Contoh: Favorit"
+            tf.autocapitalizationType = .words
+        }
+        alert.addAction(UIAlertAction(title: "Lanjut Pilih Lagu", style: .default) { [weak self] _ in
+            let name = alert.textFields?.first?.text ?? "iPod Playlist"
+            self?.presentTrackSelectionForNewPlaylist(playlistName: name)
+        })
+        alert.addAction(UIAlertAction(title: "Simpan Kosong", style: .default) { [weak self] _ in
+            let name = alert.textFields?.first?.text ?? "iPod Playlist"
+            IPodMusicLibrary.shared.createNativePlaylist(name: name, tracksToAdd: []) { _ in
+                self?.renderTopMenu(restoreIndex: 1)
+            }
+        })
+        alert.addAction(UIAlertAction(title: "Batal", style: .cancel))
+        present(alert, animated: true)
+    }
+
+    private func presentTrackSelectionForNewPlaylist(playlistName: String) {
+        let allSongs = IPodMusicLibrary.shared.allTracks
+        guard !allSongs.isEmpty else {
+            IPodMusicLibrary.shared.createNativePlaylist(name: playlistName, tracksToAdd: []) { [weak self] _ in
+                self?.renderTopMenu(restoreIndex: 1)
+            }
+            return
+        }
+
+        let sheet = UIAlertController(
+            title: "Tambah Lagu ke \"\(playlistName)\"",
+            message: "Pilih lagu dari pustaka Music untuk dimasukkan:",
+            preferredStyle: .actionSheet
+        )
+
+        for track in allSongs.prefix(15) {
+            sheet.addAction(UIAlertAction(title: "\(track.title) - \(track.artist)", style: .default) { [weak self] _ in
+                IPodMusicLibrary.shared.createNativePlaylist(name: playlistName, tracksToAdd: [track]) { _ in
+                    self?.renderTopMenu(restoreIndex: 1)
+                }
+            })
+        }
+
+        sheet.addAction(UIAlertAction(title: "Buat Tanpa Lagu", style: .default) { [weak self] _ in
+            IPodMusicLibrary.shared.createNativePlaylist(name: playlistName, tracksToAdd: []) { _ in
+                self?.renderTopMenu(restoreIndex: 1)
+            }
+        })
+        sheet.addAction(UIAlertAction(title: "Batal", style: .cancel))
+        present(sheet, animated: true)
+    }
+
     // MARK: - ClickWheelDelegate
     func clickWheelDidScroll(steps: Int) {
         if isNowPlayingActive {
@@ -196,8 +242,17 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     func clickWheelDidPressMenu() {
         if isNowPlayingActive {
-            let idx = menuStack.last?.selectedIndex ?? 0
-            renderTopMenu(restoreIndex: idx)
+            // Keluar dari halaman putar dengan animasi Cover Flow menuju ke barisan lagu aktif
+            let activeIndex: Int
+            if let top = menuStack.last, case .allSongs = top.node,
+               currentQueue.indices.contains(currentTrackIndex),
+               let matchedSongIdx = IPodMusicLibrary.shared.allTracks.firstIndex(where: { $0.id == currentQueue[currentTrackIndex].id }) {
+                activeIndex = matchedSongIdx
+                menuStack[menuStack.count - 1].selectedIndex = matchedSongIdx
+            } else {
+                activeIndex = menuStack.last?.selectedIndex ?? 0
+            }
+            renderTopMenu(restoreIndex: activeIndex, animateFromNowPlaying: true)
             return
         }
         if menuStack.count > 1 {
@@ -230,47 +285,24 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         case .music:
             switch idx {
             case 0: pushMenu(.playlists)
-            case 1: pushMenu(.artists)
-            case 2: pushMenu(.albums)
-            case 3: pushMenu(.allSongs)
+            case 1: pushMenu(.allSongs)
             default: break
             }
 
         case .playlists:
-            let pls = IPodMusicLibrary.shared.playlists
-            if pls.indices.contains(idx) {
-                pushMenu(.playlistTracks(pls[idx]))
+            if idx == 0 {
+                presentCreatePlaylistDialog()
+            } else {
+                let pls = IPodMusicLibrary.shared.playlists
+                let plIndex = idx - 1
+                if pls.indices.contains(plIndex) {
+                    pushMenu(.playlistTracks(pls[plIndex]))
+                }
             }
 
         case .playlistTracks(let group):
             if group.tracks.indices.contains(idx) {
                 startQueue(tracks: group.tracks, at: idx)
-            }
-
-        case .artists:
-            let keys = IPodMusicLibrary.shared.artists.keys.sorted()
-            if keys.indices.contains(idx) {
-                let artist = keys[idx]
-                let tracks = IPodMusicLibrary.shared.artists[artist] ?? []
-                pushMenu(.artistTracks(artist, tracks))
-            }
-
-        case .artistTracks(_, let tracks):
-            if tracks.indices.contains(idx) {
-                startQueue(tracks: tracks, at: idx)
-            }
-
-        case .albums:
-            let keys = IPodMusicLibrary.shared.albums.keys.sorted()
-            if keys.indices.contains(idx) {
-                let album = keys[idx]
-                let tracks = IPodMusicLibrary.shared.albums[album] ?? []
-                pushMenu(.albumTracks(album, tracks))
-            }
-
-        case .albumTracks(_, let tracks):
-            if tracks.indices.contains(idx) {
-                startQueue(tracks: tracks, at: idx)
             }
 
         case .allSongs:
@@ -308,20 +340,41 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         if !menuStack.isEmpty {
             menuStack[menuStack.count - 1].selectedIndex = index
         }
+
+        let targetTrack = tracks[index]
+
+        // Jika lagu yang diklik adalah lagu yang sedang aktif, langsung masuk ke Now Playing tanpa mengulang lagu dari awal
+        if currentQueue.indices.contains(currentTrackIndex),
+           currentQueue[currentTrackIndex].id == targetTrack.id,
+           player != nil {
+            if !isPlaying {
+                player?.play()
+                isPlaying = true
+                screenView.updatePlayState(isPlaying: true)
+            }
+            openNowPlayingScreen()
+            return
+        }
+
         currentQueue = tracks
         currentTrackIndex = index
-        playTrack(at: index)
+        playTrack(at: index, transitionDirection: 0)
         openNowPlayingScreen()
     }
 
-    private func openNowPlayingScreen() {
+    private func openNowPlayingScreen(transitionDirection: Int = 0) {
         guard currentQueue.indices.contains(currentTrackIndex) else { return }
         isNowPlayingActive = true
         let track = currentQueue[currentTrackIndex]
-        screenView.showNowPlaying(track: track, index: currentTrackIndex, total: currentQueue.count)
+        screenView.showNowPlaying(
+            track: track,
+            index: currentTrackIndex,
+            total: currentQueue.count,
+            transitionDirection: transitionDirection
+        )
     }
 
-    private func playTrack(at index: Int) {
+    private func playTrack(at index: Int, transitionDirection: Int = 0) {
         guard currentQueue.indices.contains(index) else { return }
         let track = currentQueue[index]
         guard let url = track.assetURL else { return }
@@ -338,7 +391,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         screenView.updatePlayState(isPlaying: true)
 
         if isNowPlayingActive {
-            screenView.showNowPlaying(track: track, index: index, total: currentQueue.count)
+            screenView.showNowPlaying(
+                track: track,
+                index: index,
+                total: currentQueue.count,
+                transitionDirection: transitionDirection
+            )
         }
 
         endObserver = NotificationCenter.default.addObserver(
@@ -351,6 +409,20 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         startProgressTimer()
         updateNowPlayingInfo(track: track, elapsed: 0)
+    }
+
+    private func seekToRatio(_ ratio: Double) {
+        guard let player = player, currentQueue.indices.contains(currentTrackIndex) else { return }
+        let track = currentQueue[currentTrackIndex]
+        let itemDur = player.currentItem.map { CMTimeGetSeconds($0.duration) } ?? track.duration
+        let validDur = (itemDur.isFinite && itemDur > 0) ? itemDur : track.duration
+        guard validDur > 0 else { return }
+
+        let targetSec = validDur * ratio
+        let targetTime = CMTime(seconds: targetSec, preferredTimescale: 600)
+        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        screenView.updateProgress(elapsed: targetSec, duration: validDur)
+        updateNowPlayingInfo(track: track, elapsed: targetSec)
     }
 
     private func togglePlayPause() {
@@ -375,7 +447,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private func playNextTrack() {
         guard !currentQueue.isEmpty else { return }
         currentTrackIndex = (currentTrackIndex + 1) % currentQueue.count
-        playTrack(at: currentTrackIndex)
+        playTrack(at: currentTrackIndex, transitionDirection: 1)
     }
 
     private func playPreviousTrack() {
@@ -385,7 +457,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             return
         }
         currentTrackIndex = (currentTrackIndex - 1 + currentQueue.count) % currentQueue.count
-        playTrack(at: currentTrackIndex)
+        playTrack(at: currentTrackIndex, transitionDirection: -1)
     }
 
     private func startProgressTimer() {

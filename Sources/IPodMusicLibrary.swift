@@ -16,6 +16,7 @@ struct IPodTrack {
 struct IPodPlaylistGroup {
     let name: String
     let tracks: [IPodTrack]
+    let nativePlaylist: MPMediaPlaylist?
 }
 
 class IPodMusicLibrary {
@@ -23,8 +24,6 @@ class IPodMusicLibrary {
 
     private(set) var allTracks: [IPodTrack] = []
     private(set) var playlists: [IPodPlaylistGroup] = []
-    private(set) var artists: [String: [IPodTrack]] = [:]
-    private(set) var albums: [String: [IPodTrack]] = [:]
 
     private init() {}
 
@@ -41,7 +40,6 @@ class IPodMusicLibrary {
         var collectedTracks: [IPodTrack] = []
         var playlistGroups: [IPodPlaylistGroup] = []
 
-        // 1. Ambil lagu dari aplikasi Music bawaan iOS (hasil sinkronisasi iTunes/3uTools)
         if MPMediaLibrary.authorizationStatus() == .authorized {
             let songsQuery = MPMediaQuery.songs()
             if let items = songsQuery.items {
@@ -53,33 +51,55 @@ class IPodMusicLibrary {
             let playlistsQuery = MPMediaQuery.playlists()
             if let collections = playlistsQuery.collections {
                 for collection in collections {
-                    let plName = collection.value(forProperty: MPMediaPlaylistPropertyName) as? String ?? "Playlist"
-                    let plTracks = collection.items.filter { $0.assetURL != nil }.map { makeTrack(from: $0) }
-                    if !plTracks.isEmpty {
-                        playlistGroups.append(IPodPlaylistGroup(name: plName, tracks: plTracks))
-                    }
+                    guard let mediaPlaylist = collection as? MPMediaPlaylist else { continue }
+                    let plName = mediaPlaylist.name ?? "Playlist"
+                    let plTracks = mediaPlaylist.items.filter { $0.assetURL != nil }.map { makeTrack(from: $0) }
+                    playlistGroups.append(IPodPlaylistGroup(name: plName, tracks: plTracks, nativePlaylist: mediaPlaylist))
                 }
             }
         }
 
-        // 2. Ambil file audio lokal (.mp3, .m4a, .wav, .aac) di folder Documents (iTunes File Sharing / Files)
         let localTracks = scanDocumentsFolder()
         if !localTracks.isEmpty {
             collectedTracks.append(contentsOf: localTracks)
-            playlistGroups.insert(IPodPlaylistGroup(name: "File Lokal (Documents)", tracks: localTracks), at: 0)
+            playlistGroups.insert(IPodPlaylistGroup(name: "File Lokal (Documents)", tracks: localTracks, nativePlaylist: nil), at: 0)
         }
 
         self.allTracks = collectedTracks
         self.playlists = playlistGroups
+    }
 
-        var artistMap: [String: [IPodTrack]] = [:]
-        var albumMap: [String: [IPodTrack]] = [:]
-        for track in collectedTracks {
-            artistMap[track.artist, default: []].append(track)
-            albumMap[track.album, default: []].append(track)
+    // Membuat playlist baru langsung di aplikasi Music bawaan iOS & menyinkronkan lagu terpilih
+    func createNativePlaylist(name: String, tracksToAdd: [IPodTrack], completion: @escaping (Bool) -> Void) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = trimmed.isEmpty ? "iPod Playlist" : trimmed
+
+        guard MPMediaLibrary.authorizationStatus() == .authorized else {
+            completion(false)
+            return
         }
-        self.artists = artistMap
-        self.albums = albumMap
+
+        let uuid = UUID()
+        let metadata = MPMediaPlaylistCreationMetadata(name: finalName)
+        metadata.authorDisplayName = "iPod"
+
+        MPMediaLibrary.default().getPlaylist(with: uuid, creationMetadata: metadata) { [weak self] playlist, error in
+            guard let self = self, let playlist = playlist, error == nil else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+
+            let mediaItems = tracksToAdd.compactMap { $0.mediaItem }
+            if !mediaItems.isEmpty {
+                playlist.add(mediaItems) { _ in
+                    self.reloadAllSources()
+                    DispatchQueue.main.async { completion(true) }
+                }
+            } else {
+                self.reloadAllSources()
+                DispatchQueue.main.async { completion(true) }
+            }
+        }
     }
 
     private func makeTrack(from item: MPMediaItem) -> IPodTrack {
