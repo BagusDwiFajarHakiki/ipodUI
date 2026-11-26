@@ -213,39 +213,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         ])
     }
 
-    private func drawEllipticalGlow(
-        in ctx: CGContext,
-        center: CGPoint,
-        rx: CGFloat,
-        ry: CGFloat,
-        peakAlpha: CGFloat
-    ) {
-        guard rx > 1, ry > 1 else { return }
-        let colors = [
-            UIColor.white.withAlphaComponent(peakAlpha).cgColor,
-            UIColor.white.withAlphaComponent(peakAlpha * 0.72).cgColor,
-            UIColor.white.withAlphaComponent(peakAlpha * 0.38).cgColor,
-            UIColor.white.withAlphaComponent(peakAlpha * 0.14).cgColor,
-            UIColor.white.withAlphaComponent(peakAlpha * 0.03).cgColor,
-            UIColor.white.withAlphaComponent(0.0).cgColor
-        ] as CFArray
-        let locations: [CGFloat] = [0.0, 0.24, 0.48, 0.70, 0.88, 1.0]
-        guard let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: locations) else { return }
-
-        ctx.saveGState()
-        ctx.translateBy(x: center.x, y: center.y)
-        ctx.scaleBy(x: rx, y: ry)
-        ctx.drawRadialGradient(
-            grad,
-            startCenter: .zero,
-            startRadius: 0.0,
-            endCenter: .zero,
-            endRadius: 1.0,
-            options: [.drawsAfterEndLocation]
-        )
-        ctx.restoreGState()
-    }
-
     private func makeSmoothLcdAmbientImage(
         canvasSize: CGSize,
         lcdRect: CGRect,
@@ -258,7 +225,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
         guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
 
-        // 1. Bright-to-soft Gaussian halo around all 4 sides of the LCD (full-alpha fill so setShadow renders at true opacity)
+        // 1. Bright-to-soft Gaussian halo around all 4 sides of the LCD
         let haloPath = UIBezierPath(roundedRect: lcdRect.insetBy(dx: 1.0, dy: 1.0), cornerRadius: 8.0)
 
         ctx.saveGState()
@@ -273,26 +240,56 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         haloPath.fill()
         ctx.restoreGState()
 
-        // 2. Wide soft bloom emerging below the LCD and widening smoothly down around the scroll wheel
-        let upperCenterY = lcdRect.maxY - lcdRect.height * 0.04
-        let upperReachY = max(145.0, (wheelRect.midY - upperCenterY) + 30.0)
-        drawEllipticalGlow(
-            in: ctx,
-            center: CGPoint(x: lcdRect.midX, y: upperCenterY),
-            rx: w * 0.68,
-            ry: upperReachY,
-            peakAlpha: 0.34
-        )
+        // 2. Rectangular light wash matching the LCD's exact width, blending from the LCD's bottom edge
+        //    downward until past the scroll wheel.
+        let downTopY = max(0.0, lcdRect.maxY - 26.0)
+        let downBottomY = min(h, wheelRect.maxY + 28.0)
+        let downHeight = downBottomY - downTopY
+        if downHeight > 4.0 {
+            ctx.saveGState()
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
 
-        let lowerCenterY = (lcdRect.maxY + wheelRect.midY) * 0.54
-        let lowerReachY = max(175.0, (wheelRect.maxY + 20.0) - lowerCenterY)
-        drawEllipticalGlow(
-            in: ctx,
-            center: CGPoint(x: wheelRect.midX, y: lowerCenterY),
-            rx: w * 0.78,
-            ry: lowerReachY,
-            peakAlpha: 0.28
-        )
+            let rectGlowFrame = CGRect(
+                x: lcdRect.minX + 1.0,
+                y: downTopY,
+                width: max(2.0, lcdRect.width - 2.0),
+                height: downHeight
+            )
+            let rectPath = UIBezierPath(roundedRect: rectGlowFrame, cornerRadius: 10.0)
+            ctx.saveGState()
+            ctx.setShadow(offset: .zero, blur: 18.0, color: UIColor.white.withAlphaComponent(0.72).cgColor)
+            UIColor.white.setFill()
+            rectPath.fill()
+            ctx.restoreGState()
+
+            ctx.setBlendMode(.destinationIn)
+            let locLcdBottom = max(0.05, min(0.35, (lcdRect.maxY - downTopY) / downHeight))
+            let locWheelTop = max(locLcdBottom + 0.05, min(0.60, (wheelRect.minY - downTopY) / downHeight))
+            let locWheelMid = max(locWheelTop + 0.05, min(0.82, (wheelRect.midY - downTopY) / downHeight))
+            let locWheelBot = max(locWheelMid + 0.05, min(0.95, (wheelRect.maxY - downTopY) / downHeight))
+
+            let vColors = [
+                UIColor.white.withAlphaComponent(0.0).cgColor,
+                UIColor.white.withAlphaComponent(0.58).cgColor,
+                UIColor.white.withAlphaComponent(0.48).cgColor,
+                UIColor.white.withAlphaComponent(0.34).cgColor,
+                UIColor.white.withAlphaComponent(0.14).cgColor,
+                UIColor.white.withAlphaComponent(0.0).cgColor
+            ] as CFArray
+            let vLocations: [CGFloat] = [0.0, locLcdBottom, locWheelTop, locWheelMid, locWheelBot, 1.0]
+
+            if let vGrad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: vColors, locations: vLocations) {
+                ctx.drawLinearGradient(
+                    vGrad,
+                    start: CGPoint(x: w * 0.5, y: downTopY),
+                    end: CGPoint(x: w * 0.5, y: downBottomY),
+                    options: []
+                )
+            }
+
+            ctx.endTransparencyLayer()
+            ctx.restoreGState()
+        }
 
         let img = UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
         UIGraphicsEndImageContext()
@@ -845,6 +842,9 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 pushMenu(.streamingSongs(pageIndex: 0))
             } else if idx == 2 {
                 if !currentQueue.isEmpty && currentQueue.indices.contains(currentTrackIndex) {
+                    if !menuStack.isEmpty {
+                        menuStack[menuStack.count - 1].selectedIndex = idx
+                    }
                     openNowPlayingScreen(animateFromCoverFlow: false)
                 } else {
                     screenView.showStatusBanner("Belum ada lagu yang diputar")

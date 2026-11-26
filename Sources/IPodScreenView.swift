@@ -364,6 +364,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let sleepTargetLabel = UILabel()
     private let timerFullIconView = UIImageView()
     private var progressWidthConstraint: NSLayoutConstraint!
+    private var normalProgressLeadingConstraint: NSLayoutConstraint!
+    private var normalProgressTrailingConstraint: NSLayoutConstraint!
+    private var sleepProgressLeadingConstraint: NSLayoutConstraint!
+    private var sleepProgressTrailingConstraint: NSLayoutConstraint!
     private var isScrubbing = false
     private(set) var barMode: IPodNowPlayingBarMode = .duration
     private var lastElapsed: TimeInterval = 0
@@ -581,6 +585,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         sleepCountdownLabel.text = "0:00"
         sleepCountdownLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        sleepCountdownLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         sleepLeftStack.addArrangedSubview(sleepCountdownLabel)
 
         sleepRightStack.axis = .horizontal
@@ -590,9 +595,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         sleepRightStack.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(sleepRightStack)
 
-        sleepTargetLabel.text = "OFF"
+        sleepTargetLabel.text = "0:00"
         sleepTargetLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
         sleepTargetLabel.textAlignment = .right
+        sleepTargetLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         sleepRightStack.addArrangedSubview(sleepTargetLabel)
 
         timerFullIconView.image = makeTimerFullIcon(size: CGSize(width: 12, height: 14))
@@ -644,6 +650,11 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         let batRatio = CGFloat(min(max(Double(pctInt) / 100.0, 0.12), 1.0))
         batteryPercentLabel.text = "\(pctInt)"
         batteryWidthConstraint = batteryFill.widthAnchor.constraint(equalTo: batteryView.widthAnchor, multiplier: batRatio, constant: -3.2)
+
+        normalProgressLeadingConstraint = progressTouchArea.leadingAnchor.constraint(equalTo: elapsedLabel.trailingAnchor, constant: 10)
+        normalProgressTrailingConstraint = progressTouchArea.trailingAnchor.constraint(equalTo: remainingLabel.leadingAnchor, constant: -10)
+        sleepProgressLeadingConstraint = progressTouchArea.leadingAnchor.constraint(equalTo: sleepLeftStack.trailingAnchor, constant: 8)
+        sleepProgressTrailingConstraint = progressTouchArea.trailingAnchor.constraint(equalTo: sleepRightStack.leadingAnchor, constant: -8)
 
         NSLayoutConstraint.activate([
             headerBar.topAnchor.constraint(equalTo: topAnchor),
@@ -758,16 +769,14 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             timerFullIconView.widthAnchor.constraint(equalToConstant: 12),
             timerFullIconView.heightAnchor.constraint(equalToConstant: 14),
 
-            sleepLeftStack.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 12),
+            sleepLeftStack.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 10),
             sleepLeftStack.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
-            sleepLeftStack.trailingAnchor.constraint(lessThanOrEqualTo: progressTouchArea.leadingAnchor, constant: -6),
 
-            sleepRightStack.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -12),
+            sleepRightStack.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -10),
             sleepRightStack.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
-            sleepRightStack.leadingAnchor.constraint(greaterThanOrEqualTo: progressTouchArea.trailingAnchor, constant: 6),
 
-            progressTouchArea.leadingAnchor.constraint(equalTo: elapsedLabel.trailingAnchor, constant: 12),
-            progressTouchArea.trailingAnchor.constraint(equalTo: remainingLabel.leadingAnchor, constant: -12),
+            normalProgressLeadingConstraint,
+            normalProgressTrailingConstraint,
             progressTouchArea.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
             progressTouchArea.heightAnchor.constraint(equalToConstant: 24),
 
@@ -1341,6 +1350,13 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         sleepLeftStack.isHidden = (mode != .sleepTimer)
         sleepRightStack.isHidden = (mode != .sleepTimer)
 
+        let isSleep = (mode == .sleepTimer)
+        normalProgressLeadingConstraint.isActive = !isSleep
+        normalProgressTrailingConstraint.isActive = !isSleep
+        sleepProgressLeadingConstraint.isActive = isSleep
+        sleepProgressTrailingConstraint.isActive = isSleep
+        layoutIfNeeded()
+
         switch mode {
         case .duration:
             updateProgress(elapsed: lastElapsed, duration: lastDuration)
@@ -1368,7 +1384,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lastSleepActive = isActive
 
         sleepCountdownLabel.text = formatTime(TimeInterval(max(0, remainingSeconds)))
-        sleepTargetLabel.text = setMinutes > 0 ? "\(setMinutes)m" : "OFF"
+        sleepTargetLabel.text = formatTime(TimeInterval(max(0, setMinutes) * 60))
         updateSleepTimerColors()
 
         guard barMode == .sleepTimer, !isScrubbing else { return }
