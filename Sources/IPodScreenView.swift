@@ -2041,16 +2041,16 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             if gap >= 18.0 {
                 // Mid-song break follows: finish singing highlight right before the inline loader arrives
                 singingWindow = estimatedVocalWindow(for: lineText)
-                lead = 0.05
+                lead = 0.0
             } else {
-                // Track nearly the whole phrase for both fast rap/pop lines and long sustained notes ("kiiiiiiini")
+                // Track nearly the whole phrase for both fast rap/pop lines and long sustained notes
                 singingWindow = max(0.42, gap - min(0.28, gap * 0.06))
-                lead = gap <= 2.2 ? 0.09 : 0.05
+                lead = gap <= 2.2 ? 0.06 : 0.0
             }
         } else {
             let remaining = max(1.0, lastDuration - start)
             singingWindow = max(0.50, remaining - min(0.28, remaining * 0.06))
-            lead = remaining <= 2.2 ? 0.09 : 0.05
+            lead = remaining <= 2.2 ? 0.06 : 0.0
         }
         return min(max((elapsed + lead - start) / max(0.4, singingWindow), 0.0), 1.0)
     }
@@ -2149,7 +2149,50 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         guard !ranges.isEmpty else { return attr }
 
         let clampedProg = min(max(progress, 0.0), 1.0)
-        let cursor = -0.20 + (Double(ranges.count) + 1.20) * clampedProg
+
+        // Compute vocal-weighted character timeline so vowels/syllables pace naturally instead of rushing early words
+        let vowels = Set<Character>(["a", "e", "i", "o", "u", "y"])
+        var cumWeights: [Double] = []
+        cumWeights.reserveCapacity(ranges.count)
+        var running = 0.0
+        for r in ranges {
+            let token = nsStr.substring(with: r).lowercased()
+            let ch = token.first ?? " "
+            let w: Double
+            if ch.isWhitespace {
+                w = 0.25
+            } else if ch == "," || ch == ";" || ch == "—" || ch == "…" {
+                w = 1.35
+            } else if vowels.contains(ch) {
+                w = 1.45
+            } else if ch.isLetter {
+                w = 0.72
+            } else {
+                w = 0.45
+            }
+            running += w
+            cumWeights.append(running)
+        }
+
+        let targetWeight = (-0.55 + (Double(ranges.count) + 1.55) * clampedProg) * (running / Double(ranges.count))
+        var cursor = -0.55 + (Double(ranges.count) + 1.55) * clampedProg
+        if running > 0 {
+            var mappedIdx = Double(ranges.count)
+            for (idx, cw) in cumWeights.enumerated() {
+                let prev = idx > 0 ? cumWeights[idx - 1] : 0.0
+                if targetWeight <= cw {
+                    let frac = (cw > prev) ? (targetWeight - prev) / (cw - prev) : 0.0
+                    mappedIdx = Double(idx) + frac
+                    break
+                }
+            }
+            if targetWeight < 0 {
+                mappedIdx = targetWeight / max(0.25, cumWeights.first ?? 1.0)
+            } else if targetWeight > running {
+                mappedIdx = Double(ranges.count) + (targetWeight - running) / max(0.25, (running / Double(ranges.count)))
+            }
+            cursor = mappedIdx
+        }
 
         for (i, range) in ranges.enumerated() {
             let rawT = (cursor - Double(i)) / 2.2 + 0.5
@@ -2359,15 +2402,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                     prog = min(max((smoothElapsed - startTime) / max(0.5, endTime - startTime), 0.0), 1.0)
                 }
 
-                // Already visible inline before it reaches center; once finished & leaving upward, fade out cleanly
-                let instAlpha: CGFloat
-                if smoothElapsed >= endTime && CGFloat(idx) < clampedPos {
-                    instAlpha = max(0.0, baseAlpha * (1.0 - dist * 1.45))
-                } else if activeDisplayIndex == idx {
-                    instAlpha = baseAlpha
-                } else {
-                    instAlpha = baseAlpha * 0.78
-                }
+                // Keep inline loader visible in bottom (upcoming), center (active), and top (completed) slots
+                let instAlpha: CGFloat = (activeDisplayIndex == idx) ? baseAlpha : (baseAlpha * 0.78)
 
                 if instAlpha > 0.01 {
                     if chosenSpinnerState == nil || dist < chosenSpinnerState!.dist {
