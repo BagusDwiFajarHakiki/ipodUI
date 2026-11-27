@@ -369,6 +369,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private var hasLeadingSearch = false
     private var activeSearchQuery: String?
     private(set) var isCoverFlowActive = false
+    private(set) var isCoverFlowOffline = false
     private let coverItemWidth: CGFloat = 104
     private let coverItemSpacing: CGFloat = -60
     private var displayLink: CADisplayLink?
@@ -1056,6 +1057,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         self.selectedIndex = min(max(0, selectedIndex), max(0, items.count - 1))
         self.isModernSettingsMenu = isModernSettings
         self.isCoverFlowActive = false
+        self.isCoverFlowOffline = false
         tableView.rowHeight = isModernSettings ? 40 : 34
         nowPlayingContainer.isHidden = true
         updateLyricsDisplayLinkState()
@@ -1085,6 +1087,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         hasLeadingSearch = false
         selectedIndex = 0
         isCoverFlowActive = true
+        isCoverFlowOffline = false
 
         nowPlayingContainer.isHidden = true
         updateLyricsDisplayLinkState()
@@ -1097,9 +1100,39 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverCaptionStack.alpha = 0.0
         coverCollectionView.reloadData()
 
+        coverLoadingLabel.text = "Memuat lagu..."
         coverLoadingStack.isHidden = false
         coverLoadingStack.alpha = 1.0
         coverLoadingSpinner.startAnimating()
+    }
+
+    func showCoverFlowNoInternet(title: String) {
+        stopSmoothScrollDisplayLink()
+        headerTitleLabel.text = title
+        coverTracks = []
+        coverItems = []
+        hasLeadingSearch = false
+        selectedIndex = 0
+        isCoverFlowActive = true
+        isCoverFlowOffline = true
+
+        nowPlayingContainer.isHidden = true
+        updateLyricsDisplayLinkState()
+        tableView.isHidden = true
+        coverFlowContainer.isHidden = false
+        coverFlowContainer.transform = .identity
+        coverFlowContainer.alpha = 1.0
+
+        coverCollectionView.alpha = 0.0
+        coverCaptionStack.alpha = 0.0
+        coverCollectionView.reloadData()
+        onActiveCoverImageChanged?(nil)
+
+        coverLoadingSpinner.stopAnimating()
+        coverLoadingLabel.numberOfLines = 0
+        coverLoadingLabel.text = "Tidak ada koneksi internet"
+        coverLoadingStack.isHidden = false
+        coverLoadingStack.alpha = 1.0
     }
 
     func showSongsCoverFlow(
@@ -1120,6 +1153,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         self.coverTracks = tracks
         self.hasLeadingSearch = showStreamingRefresh
         self.activeSearchQuery = searchQuery
+        self.isCoverFlowOffline = false
         if showStreamingRefresh {
             if tracks.isEmpty {
                 self.coverItems = [.search, .refresh]
@@ -1376,6 +1410,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
     }
 
+    func updateNowPlayingTrackIndex(_ index: Int, total: Int) {
+        trackIndexLabel.text = "\(index + 1) / \(total)"
+    }
+
     func showNowPlaying(track: IPodTrack, index: Int, total: Int, transitionDirection: Int = 0, animateFromCoverFlow: Bool = false) {
         let wasCoverFlow = isCoverFlowActive && !coverFlowContainer.isHidden
         let sourceCoverFrame = wasCoverFlow ? currentCoverFlowCenterFrame() : .zero
@@ -1387,6 +1425,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         tableView.isHidden = true
         coverFlowContainer.isHidden = true
         isCoverFlowActive = false
+        isCoverFlowOffline = false
         nowPlayingContainer.isHidden = false
 
         trackTitleLabel.text = track.title
@@ -1764,7 +1803,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         // Intro instrumental before the first synced lyric line begins
         if activeLyricIndex == nil {
-            if let firstT = lyrics.lines.first?.time, elapsed + 0.15 < firstT, firstT >= 1.5 {
+            if let firstT = lyrics.lines.first?.time, elapsed + 0.15 < firstT, firstT >= 3.0 {
                 let end = max(0.5, firstT - 0.15)
                 let prog = min(max(elapsed / end, 0.0), 1.0)
                 return (true, prog, nil, 0)
@@ -1776,7 +1815,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             return (false, 0.0, nil, nil)
         }
 
-        // Explicit instrumental cue line
+        // Explicit instrumental cue line (only if it spans a meaningful break >= 4s)
         if isInstrumentalLineText(lyrics.lines[actIdx].text) {
             let start = lyrics.lines[actIdx].time ?? elapsed
             let end: TimeInterval
@@ -1785,21 +1824,27 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             } else {
                 end = max(start + 0.5, lastDuration)
             }
-            let prog = min(max((elapsed - start) / max(0.5, end - start), 0.0), 1.0)
-            let prev = actIdx - 1 >= 0 ? actIdx - 1 : nil
-            let next = actIdx + 1 < lyrics.lines.count ? actIdx + 1 : nil
-            return (true, prog, prev, next)
+            if end - start >= 4.0 {
+                let prog = min(max((elapsed - start) / max(0.5, end - start), 0.0), 1.0)
+                let prev = actIdx - 1 >= 0 ? actIdx - 1 : nil
+                let next = actIdx + 1 < lyrics.lines.count ? actIdx + 1 : nil
+                return (true, prog, prev, next)
+            }
+            return (false, 0.0, nil, nil)
         }
 
-        // Long instrumental gap between current line and next line
+        // Mid-song instrumental break: only trigger on genuinely long gaps (>= 18s)
+        // so sustained vocal notes (e.g. "bersamaaaaaaa") keep displaying the lyric cleanly.
         if lyrics.lines.indices.contains(actIdx + 1),
            let start = lyrics.lines[actIdx].time,
            let nextT = lyrics.lines[actIdx + 1].time {
             let gap = nextT - start
-            if gap >= 10.0 {
-                let gapStart = start + min(6.2, gap * 0.48) + 0.6
-                let gapEnd = max(gapStart + 0.5, nextT - 0.15)
-                if elapsed >= gapStart && elapsed < gapEnd {
+            if gap >= 18.0 {
+                let wordCount = lyrics.lines[actIdx].text.split(separator: " ").count
+                let estimatedSing = min(9.0, max(5.5, Double(wordCount) * 0.65 + 2.8))
+                let gapStart = start + estimatedSing + 1.2
+                let gapEnd = nextT - 0.15
+                if gapEnd - gapStart >= 6.0 && elapsed >= gapStart && elapsed < gapEnd {
                     let prog = min(max((elapsed - gapStart) / max(0.5, gapEnd - gapStart), 0.0), 1.0)
                     return (true, prog, actIdx, actIdx + 1)
                 }
@@ -1863,10 +1908,15 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         let singingWindow: TimeInterval
         if lyrics.lines.indices.contains(lineIndex + 1), let nextT = lyrics.lines[lineIndex + 1].time {
             let gap = max(0.8, nextT - start)
-            singingWindow = gap > 8.5 ? 6.5 : max(0.8, gap * 0.90)
+            if gap >= 18.0 {
+                let wordCount = lyrics.lines[lineIndex].text.split(separator: " ").count
+                singingWindow = min(9.0, max(5.5, Double(wordCount) * 0.65 + 2.8))
+            } else {
+                singingWindow = max(0.8, gap * 0.88)
+            }
         } else {
             let remaining = max(1.5, lastDuration - start)
-            singingWindow = min(remaining * 0.85, 6.0)
+            singingWindow = min(remaining * 0.85, 8.0)
         }
         return min(max((elapsed - start) / max(0.6, singingWindow), 0.0), 1.0)
     }

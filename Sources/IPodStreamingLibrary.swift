@@ -103,6 +103,7 @@ final class IPodStreamingLibrary {
 
     private(set) var allStreamingTracks: [IPodTrack] = []
     private(set) var isFetchingSongs: Bool = false
+    private(set) var lastFetchWasNetworkError: Bool = false
     var onTrackArtworkLoaded: ((String, UIImage) -> Void)?
 
     private var videoIdByTrackId: [String: String] = [:]
@@ -165,6 +166,7 @@ final class IPodStreamingLibrary {
         }
 
         isFetchingSongs = true
+        lastFetchWasNetworkError = false
         fetchGeneration += 1
         let activeGen = fetchGeneration
 
@@ -177,13 +179,15 @@ final class IPodStreamingLibrary {
         let group = DispatchGroup()
         let lock = NSLock()
         var buckets: [[InnerTubeSongEntry]] = Array(repeating: [], count: searchQueries.count)
+        var anyHTTP200 = false
 
         for (i, q) in searchQueries.enumerated() {
             group.enter()
             let clients: [InnerTubeClient] = [.webRemix, .mweb, .iosMusic]
-            searchInnerTube(query: q, clients: clients, index: 0) { entries in
+            searchInnerTube(query: q, clients: clients, index: 0, hadHTTP200: false) { entries, gotHTTP200 in
                 lock.lock()
                 buckets[i] = entries
+                if gotHTTP200 { anyHTTP200 = true }
                 lock.unlock()
                 group.leave()
             }
@@ -235,6 +239,7 @@ final class IPodStreamingLibrary {
                     return
                 }
                 self.isFetchingSongs = false
+                self.lastFetchWasNetworkError = tracks.isEmpty && !anyHTTP200
                 for (k, v) in idMap { self.videoIdByTrackId[k] = v }
                 for (k, v) in thumbMap { self.thumbnailURLByTrackId[k] = v }
                 self.allStreamingTracks = tracks
@@ -244,51 +249,34 @@ final class IPodStreamingLibrary {
         }
     }
 
-    func fetchRecommendations(for track: IPodTrack, limit: Int = 20, completion: @escaping ([IPodTrack]) -> Void) {
-        guard let videoId = videoIdByTrackId[track.id], !videoId.isEmpty,
-              let endpoint = URL(string: "https://www.youtube.com/youtubei/v1/next?prettyPrint=false") else {
+    func fetchRecommendations(
+        for track: IPodTrack,
+        excludeVideoIds: Set<String> = [],
+        limit: Int = 25,
+        completion: @escaping ([IPodTrack]) -> Void
+    ) {
+        guard let seedVideoId = videoId(for: track), !seedVideoId.isEmpty else {
             DispatchQueue.main.async { completion([]) }
             return
         }
 
-        let client = InnerTubeClient.web
-        let body: [String: Any] = [
-            "context": [
-                "client": client.clientContext(visitorData: visitorData)
-            ],
-            "videoId": videoId
-        ]
+        var excluded = excludeVideoIds
+        excluded.insert(seedVideoId)
 
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 10.0
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue(client.clientId, forHTTPHeaderField: "X-YouTube-Client-Name")
-        request.setValue(client.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            guard let self = self,
-                  let data = data,
-                  error == nil,
-                  let http = response as? HTTPURLResponse,
-                  http.statusCode == 200,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                DispatchQueue.main.async { completion([]) }
-                return
+        func buildRecTracks(from entries: [InnerTubeSongEntry]) -> [IPodTrack] {
+            var unique: [InnerTubeSongEntry] = []
+            var seen = excluded
+            for e in entries where !seen.contains(e.videoId) {
+                seen.insert(e.videoId)
+                unique.append(e)
             }
-
-            let parsed = self.parseSongsFromSearchJSON(json)
-                .filter { $0.videoId != videoId }
-            let limited = Array(parsed.prefix(limit))
-
+            let shuffledLimited = Array(unique.shuffled().prefix(limit))
             var recTracks: [IPodTrack] = []
             var idMap: [String: String] = [:]
             var thumbMap: [String: String] = [:]
 
-            for (idx, entry) in limited.enumerated() {
-                let trackId = "innertube_\(entry.videoId)_rec_\(idx)"
+            for (idx, entry) in shuffledLimited.enumerated() {
+                let trackId = "innertube_\(entry.videoId)_rec_\(idx)_\(Int.random(in: 100...999))"
                 let placeholderArt = self.placeholderArtwork(seed: entry.videoId)
                 let watchURL = URL(string: "https://m.youtube.com/watch?v=\(entry.videoId)")
                 let recTrack = self.makeTrack(
@@ -313,7 +301,208 @@ final class IPodStreamingLibrary {
                 self.loadLowResThumbnailsAsync(for: recTracks, updateMainCatalog: false)
                 completion(recTracks)
             }
+            return recTracks
+        }
+
+        // Tier 1: YouTube Music Radio (RDAMVM<videoId>) for genuine genre/mood/type matching
+        fetchYouTubeMusicRadioEntries(videoId: seedVideoId) { [weak self] radioEntries in
+            guard let self = self else {
+                DispatchQueue.main.async { completion([]) }
+                return
+            }
+            let filteredRadio = radioEntries.filter { !excluded.contains($0.videoId) }
+            if filteredRadio.count >= 5 {
+                _ = buildRecTracks(from: filteredRadio)
+                return
+            }
+
+            // Tier 2: Standard YouTube Up Next (/next)
+            self.fetchStandardYouTubeNextEntries(videoId: seedVideoId) { nextEntries in
+                var combined = filteredRadio
+                var seenIds = Set(combined.map { $0.videoId })
+                for e in nextEntries where !excluded.contains(e.videoId) && !seenIds.contains(e.videoId) {
+                    seenIds.insert(e.videoId)
+                    combined.append(e)
+                }
+                if combined.count >= 3 {
+                    _ = buildRecTracks(from: combined)
+                    return
+                }
+
+                // Tier 3: Fallback style/artist InnerTube search
+                let cleanArtist = track.artist.trimmingCharacters(in: .whitespacesAndNewlines)
+                let fallbackQuery: String
+                if !cleanArtist.isEmpty && cleanArtist.lowercased() != "youtube" && cleanArtist.lowercased() != "youtube music" {
+                    fallbackQuery = "\(cleanArtist) songs official audio"
+                } else {
+                    fallbackQuery = "\(track.title) similar song official audio"
+                }
+                self.searchInnerTube(query: fallbackQuery, clients: [.webRemix, .mweb], index: 0, hadHTTP200: false) { searchEntries, _ in
+                    for e in searchEntries where !excluded.contains(e.videoId) && !seenIds.contains(e.videoId) {
+                        seenIds.insert(e.videoId)
+                        combined.append(e)
+                    }
+                    _ = buildRecTracks(from: combined)
+                }
+            }
+        }
+    }
+
+    private func fetchYouTubeMusicRadioEntries(
+        videoId: String,
+        completion: @escaping ([InnerTubeSongEntry]) -> Void
+    ) {
+        guard let endpoint = URL(string: "https://music.youtube.com/youtubei/v1/next?prettyPrint=false") else {
+            completion([])
+            return
+        }
+        let client = InnerTubeClient.webRemix
+        var ctx = client.clientContext(visitorData: visitorData)
+        ctx["originalUrl"] = "https://music.youtube.com/watch?v=\(videoId)&list=RDAMVM\(videoId)"
+
+        let body: [String: Any] = [
+            "context": ["client": ctx],
+            "videoId": videoId,
+            "playlistId": "RDAMVM\(videoId)",
+            "isAudioOnly": true
+        ]
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 9.0
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(client.clientId, forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(client.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        request.setValue("https://music.youtube.com", forHTTPHeaderField: "Origin")
+        request.setValue("https://music.youtube.com/", forHTTPHeaderField: "Referer")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self,
+                  error == nil,
+                  let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) else {
+                completion([])
+                return
+            }
+            completion(self.parseRadioRecommendations(from: json))
         }.resume()
+    }
+
+    private func fetchStandardYouTubeNextEntries(
+        videoId: String,
+        completion: @escaping ([InnerTubeSongEntry]) -> Void
+    ) {
+        guard let endpoint = URL(string: "https://www.youtube.com/youtubei/v1/next?prettyPrint=false") else {
+            completion([])
+            return
+        }
+        let client = InnerTubeClient.web
+        let body: [String: Any] = [
+            "context": ["client": client.clientContext(visitorData: visitorData)],
+            "videoId": videoId
+        ]
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 9.0
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(client.clientId, forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(client.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self,
+                  error == nil,
+                  let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) else {
+                completion([])
+                return
+            }
+            completion(self.parseRadioRecommendations(from: json))
+        }.resume()
+    }
+
+    private func parseRadioRecommendations(from root: Any) -> [InnerTubeSongEntry] {
+        var list: [InnerTubeSongEntry] = []
+        var seen = Set<String>()
+
+        let rejectedWords = [
+            "playlist", "episode", "podcast", "ep.", "ep ", "part ", "vol.", "chapter",
+            "mix", "compilation", "full album", "hour", "24/7", "radio", "live", "session", "interview"
+        ]
+
+        func isPureSongTitle(_ title: String, _ artist: String) -> Bool {
+            let combined = "\(title) \(artist)".lowercased()
+            if rejectedWords.contains(where: { combined.contains($0) }) {
+                return false
+            }
+            return title.count <= 75
+        }
+
+        func traverse(_ node: Any) {
+            if let dict = node as? [String: Any] {
+                if let panelVideo = dict["playlistPanelVideoRenderer"] as? [String: Any] {
+                    if let vid = panelVideo["videoId"] as? String, !vid.isEmpty, !seen.contains(vid),
+                       let titleObj = panelVideo["title"],
+                       let title = extractText(from: titleObj) {
+                        let bylineObj = panelVideo["longBylineText"] ?? panelVideo["shortBylineText"] ?? ""
+                        let rawArtist = extractText(from: bylineObj)
+                        let artist = cleanArtistName(from: rawArtist)
+                        if !title.isEmpty && isPureSongTitle(title, artist) {
+                            let thumb = extractThumbnailURL(from: panelVideo)
+                            seen.insert(vid)
+                            list.append(InnerTubeSongEntry(videoId: vid, title: title, artist: artist, album: "Radio", thumbnailURL: thumb))
+                        }
+                    }
+                } else if let compact = dict["compactVideoRenderer"] as? [String: Any] {
+                    if let vid = compact["videoId"] as? String, !vid.isEmpty, !seen.contains(vid),
+                       let titleObj = compact["title"],
+                       let title = extractText(from: titleObj) {
+                        let bylineObj = compact["shortBylineText"] ?? compact["longBylineText"] ?? ""
+                        let rawArtist = extractText(from: bylineObj)
+                        let artist = cleanArtistName(from: rawArtist)
+                        if !title.isEmpty && isPureSongTitle(title, artist) {
+                            let thumb = extractThumbnailURL(from: compact)
+                            seen.insert(vid)
+                            list.append(InnerTubeSongEntry(videoId: vid, title: title, artist: artist, album: "Radio", thumbnailURL: thumb))
+                        }
+                    }
+                } else if let musicItem = dict["musicResponsiveListItemRenderer"] as? [String: Any] {
+                    if let vid = extractVideoId(from: musicItem, allowPlaylist: true), !seen.contains(vid) {
+                        let texts = extractFlexColumns(from: musicItem)
+                        let title = texts.first ?? ""
+                        let rawSubtitle = texts.dropFirst().first ?? ""
+                        if !isNonSongSubtitle(rawSubtitle) {
+                            let artist = cleanArtistName(from: rawSubtitle)
+                            let album = texts.dropFirst(2).first ?? "Radio"
+                            let thumb = extractThumbnailURL(from: musicItem)
+                            if !title.isEmpty && isPureSongTitle(title, artist) {
+                                seen.insert(vid)
+                                list.append(InnerTubeSongEntry(videoId: vid, title: title, artist: artist, album: album, thumbnailURL: thumb))
+                            }
+                        }
+                    }
+                }
+
+                for value in dict.values {
+                    traverse(value)
+                }
+            } else if let array = node as? [Any] {
+                for item in array {
+                    traverse(item)
+                }
+            }
+        }
+
+        traverse(root)
+        return list
     }
 
     func invalidateCachedURL(for track: IPodTrack) {
@@ -687,6 +876,7 @@ final class IPodStreamingLibrary {
 
     private func fetchSongsFromInnerTube(reshuffle: Bool, completion: @escaping (Bool) -> Void) {
         isFetchingSongs = true
+        lastFetchWasNetworkError = false
         fetchGeneration += 1
         let activeGen = fetchGeneration
 
@@ -700,7 +890,7 @@ final class IPodStreamingLibrary {
         queryIndex = (queryIndex + 3) % songQueries.count
         selectedQueries.shuffle()
 
-        collectSongsBatch(queries: selectedQueries, targetCount: Self.pageSize) { [weak self] entries in
+        collectSongsBatch(queries: selectedQueries, targetCount: Self.pageSize) { [weak self] entries, anyHTTP200 in
             guard let self = self else {
                 DispatchQueue.main.async { completion(false) }
                 return
@@ -739,6 +929,7 @@ final class IPodStreamingLibrary {
                     return
                 }
                 self.isFetchingSongs = false
+                self.lastFetchWasNetworkError = tracks.isEmpty && !anyHTTP200
                 for (k, v) in idMap { self.videoIdByTrackId[k] = v }
                 for (k, v) in thumbMap { self.thumbnailURLByTrackId[k] = v }
                 self.allStreamingTracks = tracks
@@ -751,18 +942,20 @@ final class IPodStreamingLibrary {
     private func collectSongsBatch(
         queries: [String],
         targetCount: Int,
-        completion: @escaping ([InnerTubeSongEntry]) -> Void
+        completion: @escaping ([InnerTubeSongEntry], Bool) -> Void
     ) {
         let group = DispatchGroup()
         let lock = NSLock()
         var merged: [InnerTubeSongEntry] = []
         var seenVideoIds = Set<String>()
+        var anyHTTP200 = false
 
         for q in queries {
             group.enter()
             let clients: [InnerTubeClient] = [.webRemix, .mweb, .iosMusic]
-            searchInnerTube(query: q, clients: clients, index: 0) { entries in
+            searchInnerTube(query: q, clients: clients, index: 0, hadHTTP200: false) { entries, gotHTTP200 in
                 lock.lock()
+                if gotHTTP200 { anyHTTP200 = true }
                 for entry in entries where !seenVideoIds.contains(entry.videoId) {
                     seenVideoIds.insert(entry.videoId)
                     merged.append(entry)
@@ -773,21 +966,22 @@ final class IPodStreamingLibrary {
         }
 
         group.notify(queue: .global(qos: .userInitiated)) {
-            if merged.count >= targetCount {
-                completion(merged)
+            if merged.count >= targetCount || (!anyHTTP200 && merged.isEmpty) {
+                completion(merged, anyHTTP200)
                 return
             }
             // Top-up wave if initial 5 queries returned fewer than 50 after filtering
             let extraQueries = self.songQueries.filter { !queries.contains($0) }.shuffled().prefix(3)
             if extraQueries.isEmpty {
-                completion(merged)
+                completion(merged, anyHTTP200)
                 return
             }
             let topUpGroup = DispatchGroup()
             for q in extraQueries {
                 topUpGroup.enter()
-                self.searchInnerTube(query: q, clients: [.webRemix, .mweb], index: 0) { entries in
+                self.searchInnerTube(query: q, clients: [.webRemix, .mweb], index: 0, hadHTTP200: false) { entries, gotHTTP200 in
                     lock.lock()
+                    if gotHTTP200 { anyHTTP200 = true }
                     for entry in entries where !seenVideoIds.contains(entry.videoId) {
                         seenVideoIds.insert(entry.videoId)
                         merged.append(entry)
@@ -797,7 +991,7 @@ final class IPodStreamingLibrary {
                 }
             }
             topUpGroup.notify(queue: .global(qos: .userInitiated)) {
-                completion(merged)
+                completion(merged, anyHTTP200)
             }
         }
     }
@@ -806,15 +1000,16 @@ final class IPodStreamingLibrary {
         query: String,
         clients: [InnerTubeClient],
         index: Int,
-        completion: @escaping ([InnerTubeSongEntry]) -> Void
+        hadHTTP200: Bool,
+        completion: @escaping ([InnerTubeSongEntry], Bool) -> Void
     ) {
         guard clients.indices.contains(index) else {
-            completion([])
+            completion([], hadHTTP200)
             return
         }
         let client = clients[index]
         guard let endpoint = URL(string: "https://www.youtube.com/youtubei/v1/search?prettyPrint=false") else {
-            completion([])
+            completion([], hadHTTP200)
             return
         }
 
@@ -827,7 +1022,7 @@ final class IPodStreamingLibrary {
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 10.0
+        request.timeoutInterval = 8.0
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(client.clientId, forHTTPHeaderField: "X-YouTube-Client-Name")
@@ -836,12 +1031,14 @@ final class IPodStreamingLibrary {
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
+            let httpCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let nextHadHTTP200 = hadHTTP200 || (error == nil && httpCode == 200)
+
             guard let data = data,
                   error == nil,
-                  let http = response as? HTTPURLResponse,
-                  http.statusCode == 200,
+                  httpCode == 200,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                self.searchInnerTube(query: query, clients: clients, index: index + 1, completion: completion)
+                self.searchInnerTube(query: query, clients: clients, index: index + 1, hadHTTP200: nextHadHTTP200, completion: completion)
                 return
             }
 
@@ -852,9 +1049,9 @@ final class IPodStreamingLibrary {
 
             let parsed = self.parseSongsFromSearchJSON(json)
             if !parsed.isEmpty {
-                completion(parsed)
+                completion(parsed, true)
             } else {
-                self.searchInnerTube(query: query, clients: clients, index: index + 1, completion: completion)
+                self.searchInnerTube(query: query, clients: clients, index: index + 1, hadHTTP200: true, completion: completion)
             }
         }.resume()
     }
