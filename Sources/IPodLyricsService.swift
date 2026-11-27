@@ -44,7 +44,22 @@ final class IPodLyricsService {
         inFlightCallbacks[track.id] = [completion]
         stateLock.unlock()
 
-        func finish(with lyrics: IPodTrackLyrics?) {
+        func finish(with rawLyrics: IPodTrackLyrics?) {
+            let lyrics: IPodTrackLyrics?
+            if let valid = rawLyrics, !valid.lines.isEmpty {
+                let romanizedLines = valid.lines.map {
+                    IPodLyricLine(time: $0.time, text: self.romanizeLyricLineIfNeeded($0.text))
+                }
+                lyrics = IPodTrackLyrics(
+                    trackId: valid.trackId,
+                    lines: romanizedLines,
+                    isSynced: valid.isSynced,
+                    source: valid.source
+                )
+            } else {
+                lyrics = rawLyrics
+            }
+
             self.stateLock.lock()
             if let valid = lyrics, !valid.lines.isEmpty {
                 self.cache[track.id] = valid
@@ -444,5 +459,57 @@ final class IPodLyricsService {
         cleanTitle = cleanTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         cleanArtist = cleanArtist.trimmingCharacters(in: .whitespacesAndNewlines)
         return (cleanTitle, cleanArtist)
+    }
+
+    private func containsNonLatinLetters(_ text: String) -> Bool {
+        for scalar in text.unicodeScalars {
+            if CharacterSet.letters.contains(scalar) && scalar.value > 0x024F {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func romanizeLyricLineIfNeeded(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, containsNonLatinLetters(trimmed) else {
+            return trimmed
+        }
+
+        var latin = trimmed.applyingTransform(.toLatin, reverse: false) ?? trimmed
+
+        let replacements: [(String, String)] = [
+            ("Č", "Ch"), ("č", "ch"),
+            ("Š", "Sh"), ("š", "sh"),
+            ("Ž", "Zh"), ("ž", "zh"),
+            ("Ŝ", "Shch"), ("ŝ", "shch"),
+            ("Û", "Yu"), ("û", "yu"),
+            ("Â", "Ya"), ("â", "ya"),
+            ("Ë", "Yo"), ("ë", "yo"),
+            ("Ǧ", "Gh"), ("ǧ", "gh"),
+            ("Ḫ", "Kh"), ("ḫ", "kh"),
+            ("Ṯ", "Th"), ("ṯ", "th"),
+            ("Ḏ", "Dh"), ("ḏ", "dh"),
+            ("\u{02B9}", ""), ("\u{02BA}", ""),
+            ("\u{02BF}", "'"), ("\u{02BB}", "'"), ("\u{02BE}", "")
+        ]
+        for (src, dst) in replacements {
+            if latin.contains(src) {
+                latin = latin.replacingOccurrences(of: src, with: dst)
+            }
+        }
+
+        if let stripped = latin.applyingTransform(.stripDiacritics, reverse: false) {
+            latin = stripped
+        }
+
+        while latin.contains("  ") {
+            latin = latin.replacingOccurrences(of: "  ", with: " ")
+        }
+        latin = latin.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let first = latin.first, first.isLowercase {
+            latin = String(first).uppercased() + latin.dropFirst()
+        }
+        return latin.isEmpty ? trimmed : latin
     }
 }

@@ -526,7 +526,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         tableView.dataSource = self
         tableView.delegate = self
         tableView.register(IPodMenuCell.self, forCellReuseIdentifier: "IPodCell")
-        tableView.rowHeight = 36
+        tableView.rowHeight = 40
         tableView.separatorStyle = .none
         tableView.backgroundColor = .clear
         tableView.isUserInteractionEnabled = false
@@ -1069,7 +1069,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         self.isModernSettingsMenu = isModernSettings
         self.isCoverFlowActive = false
         self.isCoverFlowOffline = false
-        tableView.rowHeight = isModernSettings ? 40 : 34
+        tableView.rowHeight = 40
         nowPlayingContainer.isHidden = true
         updateLyricsDisplayLinkState()
         coverFlowContainer.isHidden = true
