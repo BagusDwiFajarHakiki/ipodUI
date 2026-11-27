@@ -645,10 +645,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         case .streamingSongs(let pageIndex):
             let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
-            let header = pageData.totalPages > 1
-                ? "Streaming (\(pageData.currentPage + 1)/\(pageData.totalPages))"
-                : "Streaming"
-            return (header, pageData.tracks.map { IPodMenuRow(title: $0.title, hasSubmenu: false) })
+            return ("Streaming", pageData.tracks.map { IPodMenuRow(title: $0.title, hasSubmenu: false) })
 
         case .playlists:
             var items = [IPodMenuRow(title: "+ New Playlist...", hasSubmenu: false)]
@@ -732,11 +729,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 screenView.showCoverFlowNoInternet(title: baseTitle)
                 return
             }
-            let header = pageData.totalPages > 1
-                ? "\(baseTitle) (\(pageData.currentPage + 1)/\(pageData.totalPages))"
-                : baseTitle
             screenView.showSongsCoverFlow(
-                title: header,
+                title: baseTitle,
                 tracks: pageData.tracks,
                 selectedIndex: restoreIndex,
                 animateFromNowPlaying: animateFromNowPlaying,
@@ -1165,7 +1159,20 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private func playTrack(at index: Int, transitionDirection: Int = 0, resumeFromSeconds: Double = 0, isWatchdogRetry: Bool = false) {
         guard currentQueue.indices.contains(index) else { return }
-        let track = currentQueue[index]
+        var track = currentQueue[index]
+        if track.id.hasPrefix("innertube_"), let cachedArt = IPodStreamingLibrary.shared.cachedArtwork(for: track) {
+            track = IPodTrack(
+                id: track.id,
+                title: track.title,
+                artist: track.artist,
+                album: track.album,
+                duration: track.duration,
+                assetURL: track.assetURL,
+                mediaItem: track.mediaItem,
+                artworkImage: cachedArt
+            )
+            currentQueue[index] = track
+        }
 
         clearItemObservers()
         resetWatchdogState()
@@ -1179,12 +1186,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         playingTrackArtwork = track.artworkImage
         screenView.updatePlayState(isPlaying: true)
         updateAmbientGlow(from: track.artworkImage)
-        if !isWatchdogRetry {
-            prefetchLyricsIfNeeded(for: track)
-            if track.id.hasPrefix("innertube_") {
-                IPodStreamingLibrary.shared.ensureArtworkLoaded(for: track)
-            }
-        }
 
         if isNowPlayingActive && !isWatchdogRetry {
             screenView.showNowPlaying(
@@ -1194,6 +1195,13 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 transitionDirection: transitionDirection,
                 animateFromCoverFlow: false
             )
+        }
+
+        if !isWatchdogRetry {
+            prefetchLyricsIfNeeded(for: track)
+            if track.id.hasPrefix("innertube_") {
+                IPodStreamingLibrary.shared.ensureArtworkLoaded(for: track)
+            }
         }
 
         if track.id.hasPrefix("innertube_") {
@@ -1209,17 +1217,17 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
                 switch result {
                 case .playable(let stream):
-                    var updatedTrack = track
+                    var updatedTrack = self.currentQueue[self.currentTrackIndex]
                     if let realDur = stream.duration, realDur > 0 {
                         updatedTrack = IPodTrack(
-                            id: track.id,
-                            title: track.title,
-                            artist: track.artist,
-                            album: track.album,
+                            id: updatedTrack.id,
+                            title: updatedTrack.title,
+                            artist: updatedTrack.artist,
+                            album: updatedTrack.album,
                             duration: realDur,
-                            assetURL: track.assetURL,
-                            mediaItem: track.mediaItem,
-                            artworkImage: track.artworkImage
+                            assetURL: updatedTrack.assetURL,
+                            mediaItem: updatedTrack.mediaItem,
+                            artworkImage: updatedTrack.artworkImage
                         )
                         self.currentQueue[self.currentTrackIndex] = updatedTrack
                         if self.isNowPlayingActive {

@@ -805,7 +805,9 @@ final class IPodStreamingLibrary {
             return existingIdx
         }
 
-        let insertIdx = min(max(0, preferredIndex), allStreamingTracks.count)
+        let maxPageCap = Self.pageSize
+        let clampedTarget = allStreamingTracks.count >= maxPageCap ? maxPageCap - 1 : allStreamingTracks.count
+        let insertIdx = min(max(0, preferredIndex), clampedTarget)
         let resolvedTrack: IPodTrack
         if let vid = targetVid, let realArt = realArtworkByVideoId[vid] {
             resolvedTrack = makeTrack(
@@ -822,6 +824,9 @@ final class IPodStreamingLibrary {
         }
 
         allStreamingTracks.insert(resolvedTrack, at: insertIdx)
+        if allStreamingTracks.count > maxPageCap {
+            allStreamingTracks.removeLast()
+        }
         if let vid = targetVid, !vid.isEmpty {
             videoIdByTrackId[resolvedTrack.id] = vid
         }
@@ -1569,6 +1574,11 @@ final class IPodStreamingLibrary {
             appendURL("https://i.ytimg.com/vi/\(vid)/hqdefault.jpg")
         }
         return urls
+    }
+
+    func cachedArtwork(for track: IPodTrack) -> UIImage? {
+        guard let vid = videoId(for: track), !vid.isEmpty else { return nil }
+        return realArtworkByVideoId[vid]
     }
 
     func ensureArtworkLoaded(for track: IPodTrack) {

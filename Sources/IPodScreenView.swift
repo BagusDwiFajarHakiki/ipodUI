@@ -1923,20 +1923,25 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
               let start = lyrics.lines[lineIndex].time else {
             return 1.0
         }
+        let lineText = lyrics.lines[lineIndex].text
+        let words = Double(max(1, lineText.split(separator: " ").count))
+        let chars = Double(lineText.count)
+        let naturalWindow = max(1.15, words * 0.33 + chars * 0.025 + 0.40)
+
         let singingWindow: TimeInterval
         if lyrics.lines.indices.contains(lineIndex + 1), let nextT = lyrics.lines[lineIndex + 1].time {
-            let gap = max(0.8, nextT - start)
-            if gap >= 18.0 {
-                let wordCount = lyrics.lines[lineIndex].text.split(separator: " ").count
-                singingWindow = min(9.0, max(5.5, Double(wordCount) * 0.65 + 2.8))
+            let gap = max(0.6, nextT - start)
+            if gap <= 4.0 {
+                singingWindow = max(0.65, gap * 0.76)
             } else {
-                singingWindow = max(0.8, gap * 0.88)
+                singingWindow = min(gap * 0.70, min(6.0, naturalWindow))
             }
         } else {
-            let remaining = max(1.5, lastDuration - start)
-            singingWindow = min(remaining * 0.85, 8.0)
+            let remaining = max(1.2, lastDuration - start)
+            singingWindow = min(remaining * 0.76, min(6.0, naturalWindow))
         }
-        return min(max((elapsed - start) / max(0.6, singingWindow), 0.0), 1.0)
+        let linear = min(max((elapsed + 0.15 - start) / max(0.5, singingWindow), 0.0), 1.0)
+        return pow(linear, 0.86)
     }
 
     private func interpolateColor(from c1: UIColor, to c2: UIColor, t: CGFloat) -> UIColor {
@@ -2036,7 +2041,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         let cursor = Double(ranges.count) * clampedProg
 
         for (i, range) in ranges.enumerated() {
-            let rawT = (cursor - Double(i)) / 2.6 + 0.5
+            let rawT = (cursor + 0.45 - Double(i)) / 2.2 + 0.5
             let t = CGFloat(min(max(rawT, 0.0), 1.0))
             let color = interpolateColor(from: dimmedColor, to: litColor, t: t)
             attr.addAttribute(.foregroundColor, value: color, range: range)

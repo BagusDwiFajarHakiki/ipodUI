@@ -45,31 +45,46 @@ final class IPodLyricsService {
         stateLock.unlock()
 
         func finish(with rawLyrics: IPodTrackLyrics?) {
-            let lyrics: IPodTrackLyrics?
-            if let valid = rawLyrics, !valid.lines.isEmpty {
-                let romanizedLines = valid.lines.map {
-                    IPodLyricLine(time: $0.time, text: self.romanizeLyricLineIfNeeded($0.text))
+            func deliver(_ finalLyrics: IPodTrackLyrics?) {
+                self.stateLock.lock()
+                if let valid = finalLyrics, !valid.lines.isEmpty {
+                    self.cache[track.id] = valid
                 }
-                lyrics = IPodTrackLyrics(
+                let callbacks = self.inFlightCallbacks.removeValue(forKey: track.id) ?? []
+                self.stateLock.unlock()
+                DispatchQueue.main.async {
+                    for cb in callbacks {
+                        cb(finalLyrics)
+                    }
+                }
+            }
+
+            guard let valid = rawLyrics, !valid.lines.isEmpty else {
+                deliver(rawLyrics)
+                return
+            }
+
+            let hasNonLatin = valid.lines.contains { self.containsNonLatinLetters($0.text) }
+            guard hasNonLatin else {
+                let cleanedLines = valid.lines.map {
+                    IPodLyricLine(time: $0.time, text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                deliver(IPodTrackLyrics(
+                    trackId: valid.trackId,
+                    lines: cleanedLines,
+                    isSynced: valid.isSynced,
+                    source: valid.source
+                ))
+                return
+            }
+
+            self.romanizeLinesAsync(valid.lines) { romanizedLines in
+                deliver(IPodTrackLyrics(
                     trackId: valid.trackId,
                     lines: romanizedLines,
                     isSynced: valid.isSynced,
                     source: valid.source
-                )
-            } else {
-                lyrics = rawLyrics
-            }
-
-            self.stateLock.lock()
-            if let valid = lyrics, !valid.lines.isEmpty {
-                self.cache[track.id] = valid
-            }
-            let callbacks = self.inFlightCallbacks.removeValue(forKey: track.id) ?? []
-            self.stateLock.unlock()
-            DispatchQueue.main.async {
-                for cb in callbacks {
-                    cb(lyrics)
-                }
+                ))
             }
         }
 
@@ -470,10 +485,225 @@ final class IPodLyricsService {
         return false
     }
 
+    private func containsArabicLetters(_ text: String) -> Bool {
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            if (v >= 0x0600 && v <= 0x06FF) ||
+               (v >= 0x0750 && v <= 0x077F) ||
+               (v >= 0x08A0 && v <= 0x08FF) ||
+               (v >= 0xFB50 && v <= 0xFDFF) ||
+               (v >= 0xFE70 && v <= 0xFEFF) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func romanizeLinesAsync(_ lines: [IPodLyricLine], completion: @escaping ([IPodLyricLine]) -> Void) {
+        var seen = Set<String>()
+        var arabicUnique: [String] = []
+        var otherUnique: [String] = []
+
+        for line in lines {
+            let trimmed = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, containsNonLatinLetters(trimmed), !seen.contains(trimmed) else { continue }
+            seen.insert(trimmed)
+            if containsArabicLetters(trimmed) {
+                arabicUnique.append(trimmed)
+            } else {
+                otherUnique.append(trimmed)
+            }
+        }
+
+        guard !arabicUnique.isEmpty || !otherUnique.isEmpty else {
+            completion(lines.map { IPodLyricLine(time: $0.time, text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines)) })
+            return
+        }
+
+        let group = DispatchGroup()
+        let mapLock = NSLock()
+        var remoteMap: [String: String] = [:]
+
+        func enqueueBatches(for items: [String], sourceLang: String, isArabic: Bool) {
+            let batches = makeTransliterationBatches(items, maxLines: 30, maxUTF8Bytes: 1400)
+            for batch in batches {
+                group.enter()
+                fetchGoogleRomanizationBatch(batch, sourceLang: sourceLang) { translated in
+                    if let translated = translated, translated.count == batch.count {
+                        mapLock.lock()
+                        for (src, rawOut) in zip(batch, translated) {
+                            let polished = self.cleanGoogleRomanizedLine(rawOut, original: src, isArabic: isArabic)
+                            if !polished.isEmpty {
+                                remoteMap[src] = polished
+                            }
+                        }
+                        mapLock.unlock()
+                    }
+                    group.leave()
+                }
+            }
+        }
+
+        enqueueBatches(for: arabicUnique, sourceLang: "ar", isArabic: true)
+        enqueueBatches(for: otherUnique, sourceLang: "auto", isArabic: false)
+
+        group.notify(queue: DispatchQueue.global(qos: .userInitiated)) {
+            let finalLines: [IPodLyricLine] = lines.map { line in
+                let trimmed = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let remote = remoteMap[trimmed], !remote.isEmpty {
+                    return IPodLyricLine(time: line.time, text: remote)
+                }
+                return IPodLyricLine(time: line.time, text: self.romanizeLyricLineIfNeeded(trimmed))
+            }
+            completion(finalLines)
+        }
+    }
+
+    private func makeTransliterationBatches(_ lines: [String], maxLines: Int, maxUTF8Bytes: Int) -> [[String]] {
+        var batches: [[String]] = []
+        var current: [String] = []
+        var currentBytes = 0
+
+        for line in lines {
+            let lineBytes = line.utf8.count + 1
+            if !current.isEmpty && (current.count >= maxLines || currentBytes + lineBytes > maxUTF8Bytes) {
+                batches.append(current)
+                current = []
+                currentBytes = 0
+            }
+            current.append(line)
+            currentBytes += lineBytes
+        }
+        if !current.isEmpty {
+            batches.append(current)
+        }
+        return batches
+    }
+
+    private func formURLEncoded(_ value: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+    }
+
+    private func fetchGoogleRomanizationBatch(
+        _ lines: [String],
+        sourceLang: String,
+        completion: @escaping ([String]?) -> Void
+    ) {
+        guard !lines.isEmpty,
+              let url = URL(string: "https://translate.googleapis.com/translate_a/single?client=gtx&sl=\(sourceLang)&tl=en&dt=rm") else {
+            completion(nil)
+            return
+        }
+
+        let joinedInput = lines.joined(separator: "\n")
+        let bodyString = "q=" + formURLEncoded(joinedInput)
+        guard let bodyData = bodyString.data(using: .utf8) else {
+            completion(nil)
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 4.5
+        request.httpBody = bodyData
+        request.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            guard error == nil,
+                  let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let data = data,
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [Any],
+                  let segments = root.first as? [[Any]] else {
+                completion(nil)
+                return
+            }
+
+            var combined = ""
+            for seg in segments {
+                if seg.count > 3, let part = seg[3] as? String {
+                    combined += part
+                }
+            }
+            guard !combined.isEmpty else {
+                completion(nil)
+                return
+            }
+
+            let splitLines = combined.components(separatedBy: "\n")
+            guard splitLines.count == lines.count else {
+                completion(nil)
+                return
+            }
+            completion(splitLines)
+        }.resume()
+    }
+
+    private func cleanGoogleRomanizedLine(_ raw: String, original: String, isArabic: Bool) -> String {
+        var text = raw.applyingTransform(.stripDiacritics, reverse: false) ?? raw
+
+        if isArabic {
+            var existingLatinWords = Set<String>()
+            if let wordRegex = try? NSRegularExpression(pattern: "[A-Za-z]+", options: []) {
+                let nsOrig = original as NSString
+                let matches = wordRegex.matches(in: original, options: [], range: NSRange(location: 0, length: nsOrig.length))
+                for m in matches {
+                    existingLatinWords.insert(nsOrig.substring(with: m.range).lowercased())
+                }
+            }
+
+            let punctSet = CharacterSet.punctuationCharacters.union(.symbols)
+            let tokens = text.components(separatedBy: .whitespaces)
+            var adjustedTokens: [String] = []
+            adjustedTokens.reserveCapacity(tokens.count)
+
+            for tok in tokens {
+                guard !tok.isEmpty else { continue }
+                let coreLower = tok.trimmingCharacters(in: punctSet).lowercased()
+                if !coreLower.isEmpty && existingLatinWords.contains(coreLower) {
+                    adjustedTokens.append(tok)
+                    continue
+                }
+
+                // In Google dt=rm Arabic output, 'e'/'E' encodes Arabic Ayn (ع)
+                var fixed = tok.replacingOccurrences(of: "e", with: "'")
+                    .replacingOccurrences(of: "E", with: "'")
+
+                if let leadingApos = try? NSRegularExpression(pattern: "(?:^|(?<=[\\(\\[\"']))'+", options: []) {
+                    let r = NSRange(location: 0, length: (fixed as NSString).length)
+                    fixed = leadingApos.stringByReplacingMatches(in: fixed, options: [], range: r, withTemplate: "")
+                }
+                if let trailingDoubleA = try? NSRegularExpression(pattern: "aa(?=$|[^A-Za-z])", options: [.caseInsensitive]) {
+                    let r = NSRange(location: 0, length: (fixed as NSString).length)
+                    fixed = trailingDoubleA.stringByReplacingMatches(in: fixed, options: [], range: r, withTemplate: "a")
+                }
+
+                adjustedTokens.append(fixed)
+            }
+            text = adjustedTokens.joined(separator: " ")
+        }
+
+        while text.contains("  ") {
+            text = text.replacingOccurrences(of: "  ", with: " ")
+        }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let first = text.first, first.isLowercase {
+            text = String(first).uppercased() + text.dropFirst()
+        }
+        return text
+    }
+
     private func romanizeLyricLineIfNeeded(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, containsNonLatinLetters(trimmed) else {
             return trimmed
+        }
+
+        if containsArabicLetters(trimmed) {
+            return romanizeArabicOffline(trimmed)
         }
 
         var latin = trimmed.applyingTransform(.toLatin, reverse: false) ?? trimmed
@@ -511,5 +741,191 @@ final class IPodLyricsService {
             latin = String(first).uppercased() + latin.dropFirst()
         }
         return latin.isEmpty ? trimmed : latin
+    }
+
+    private func romanizeArabicOffline(_ text: String) -> String {
+        let commonWords: [String: String] = [
+            "الله": "Allah", "لله": "lillah", "والله": "wallah", "محمد": "Muhammad",
+            "رحمن": "rahman", "رحيم": "rahim", "سبحان": "subhan", "الحمد": "alhamdu",
+            "حبيبي": "habibi", "حبيب": "habib", "قلبي": "qalbi", "قلب": "qalb",
+            "روحي": "ruhi", "روح": "ruh", "عمري": "umri", "عمر": "umar",
+            "عيني": "aini", "عين": "ain", "عيوني": "uyuni", "نور": "nur",
+            "سلام": "salam", "السلام": "assalam", "عليكم": "alaykum", "يا": "ya",
+            "في": "fi", "من": "min", "علي": "ali", "على": "ala",
+            "الى": "ila", "عن": "an", "مع": "ma'a", "معاك": "ma'ak",
+            "معايا": "ma'aya", "انا": "ana", "انت": "anta", "انتي": "anti",
+            "هو": "huwa", "هي": "hiya", "نحن": "nahnu", "لو": "law",
+            "كل": "kull", "بس": "bas", "مش": "mish", "عشان": "ashan",
+            "ليه": "leh", "فين": "fein", "ايه": "eh", "بحبك": "bahebbak",
+            "احبك": "uhibbuk", "الدنيا": "addunya", "دنيا": "dunya", "جنة": "jannah",
+            "الليل": "allayl", "ليلي": "laili", "نهار": "nahar", "شمس": "shams",
+            "قمر": "qamar", "صبر": "sabr", "شوق": "shawq", "فرح": "farah",
+            "حزن": "huzn", "كلام": "kalam", "بكرة": "bukra", "اليوم": "alyawm",
+            "بيني": "bayni", "بيننا": "baynana", "عني": "anni", "بعيد": "ba'id",
+            "قريب": "qarib", "غالي": "ghali", "مشتاق": "mushtaq", "سعيد": "sa'id",
+            "تعال": "ta'al", "حياة": "hayah", "حياتي": "hayati", "زمان": "zaman",
+            "مكان": "makan", "نفس": "nafs", "نفسي": "nafsi", "رب": "rabb",
+            "ربي": "rabbi", "لا": "la", "ما": "ma", "و": "wa",
+            "قد": "qad", "كان": "kan", "يكون": "yakun", "غير": "ghayr",
+            "تحت": "taht", "فوق": "fawq", "قبل": "qabl", "بعد": "ba'd",
+            "حتى": "hatta", "ابدا": "abadan", "دايما": "dayman", "كثير": "kathir",
+            "كبير": "kabir", "صغير": "saghir", "جميل": "jamil", "ممكن": "mumkin",
+            "لازم": "lazim", "عندي": "indi", "عندك": "indak", "عنده": "indahu",
+            "صدري": "sadri", "قرآن": "quran", "قران": "quran", "ساعدني": "sa'idni"
+        ]
+
+        let consonantMap: [Unicode.Scalar: String] = [
+            "ب": "b", "ت": "t", "ث": "th", "ج": "j", "ح": "h", "خ": "kh",
+            "د": "d", "ذ": "dh", "ر": "r", "ز": "z", "س": "s", "ش": "sh",
+            "ص": "s", "ض": "d", "ط": "t", "ظ": "z", "ع": "'", "غ": "gh",
+            "ف": "f", "ق": "q", "ك": "k", "ل": "l", "م": "m", "ن": "n",
+            "ه": "h", "ة": "ah", "ء": "'"
+        ]
+
+        func isArabicLetter(_ s: Unicode.Scalar) -> Bool {
+            let v = s.value
+            return (v >= 0x0621 && v <= 0x064A) || (v >= 0x0671 && v <= 0x06D3)
+        }
+
+        func normalizeArabicWordKey(_ w: String) -> String {
+            var out = ""
+            for scalar in w.unicodeScalars {
+                let v = scalar.value
+                // Skip tatweel and harakat diacritics
+                if v == 0x0640 || (v >= 0x064B && v <= 0x065F) || v == 0x0670 {
+                    continue
+                }
+                switch scalar {
+                case "أ", "إ", "آ", "ٱ": out.append("ا")
+                default: out.unicodeScalars.append(scalar)
+                }
+            }
+            return out
+        }
+
+        func romanizeArabicWord(_ word: String) -> String {
+            let key = normalizeArabicWordKey(word)
+            if let hit = commonWords[key] {
+                return hit
+            }
+            if !word.unicodeScalars.contains(where: { isArabicLetter($0) }) {
+                return word
+            }
+
+            let scalars = Array(word.unicodeScalars.filter { $0.value != 0x0640 })
+            var out = ""
+            var idx = 0
+            var pendingConsonantVowel = false
+            var lastConsonant = ""
+
+            if scalars.count >= 3 && (scalars[0] == "ا" || scalars[0] == "ٱ") && scalars[1] == "ل" {
+                out = "al"
+                idx = 2
+            }
+
+            while idx < scalars.count {
+                let s = scalars[idx]
+                switch s.value {
+                case 0x064E: // fatha
+                    out += "a"; pendingConsonantVowel = false
+                case 0x064F: // damma
+                    out += "u"; pendingConsonantVowel = false
+                case 0x0650: // kasra
+                    out += "i"; pendingConsonantVowel = false
+                case 0x064B: // fathatan
+                    out += "an"; pendingConsonantVowel = false
+                case 0x064C: // dammatan
+                    out += "un"; pendingConsonantVowel = false
+                case 0x064D: // kasratan
+                    out += "in"; pendingConsonantVowel = false
+                case 0x0652: // sukun
+                    pendingConsonantVowel = false
+                case 0x0651: // shadda
+                    if !lastConsonant.isEmpty { out += lastConsonant }
+                case 0x0670: // dagger alif
+                    out += "a"; pendingConsonantVowel = false
+                default:
+                    if s == "ا" || s == "آ" || s == "أ" || s == "إ" || s == "ٱ" || s == "ى" {
+                        if idx == 0 && (s == "ا" || s == "أ" || s == "إ") {
+                            out += "a"
+                        } else if !out.hasSuffix("a") {
+                            out += "a"
+                        }
+                        pendingConsonantVowel = false
+                        lastConsonant = ""
+                    } else if s == "و" {
+                        if pendingConsonantVowel {
+                            out += "u"
+                        } else {
+                            out += (idx == 0) ? "w" : "u"
+                        }
+                        pendingConsonantVowel = false
+                        lastConsonant = ""
+                    } else if s == "ي" || s == "ئ" {
+                        if pendingConsonantVowel {
+                            out += "i"
+                        } else {
+                            out += (idx == 0) ? "y" : "i"
+                        }
+                        pendingConsonantVowel = false
+                        lastConsonant = ""
+                    } else if let mapped = consonantMap[s] {
+                        if pendingConsonantVowel && mapped != "'" && mapped != "ah" {
+                            out += "a"
+                        }
+                        out += mapped
+                        pendingConsonantVowel = (mapped != "'" && mapped != "ah")
+                        lastConsonant = mapped
+                    } else {
+                        if pendingConsonantVowel {
+                            pendingConsonantVowel = false
+                        }
+                        out.unicodeScalars.append(s)
+                        lastConsonant = ""
+                    }
+                }
+                idx += 1
+            }
+
+            if out.hasPrefix("'") && out.count > 1 {
+                out.removeFirst()
+            }
+            return out
+        }
+
+        let tokens = text.components(separatedBy: .whitespaces)
+        var resultTokens: [String] = []
+        resultTokens.reserveCapacity(tokens.count)
+        let punct = CharacterSet.punctuationCharacters.union(.symbols)
+
+        for tok in tokens where !tok.isEmpty {
+            if let lead = tok.rangeOfCharacter(from: punct.inverted) {
+                let prefix = String(tok[..<lead.lowerBound])
+                let rest = String(tok[lead.lowerBound...])
+                let core: String
+                let suffix: String
+                if let trail = rest.rangeOfCharacter(from: punct.inverted, options: .backwards) {
+                    core = String(rest[..<trail.upperBound])
+                    suffix = String(rest[trail.upperBound...])
+                } else {
+                    core = rest
+                    suffix = ""
+                }
+                let converted = core.unicodeScalars.contains(where: { isArabicLetter($0) }) ? romanizeArabicWord(core) : core
+                resultTokens.append(prefix + converted + suffix)
+            } else {
+                resultTokens.append(tok)
+            }
+        }
+
+        var joined = resultTokens.joined(separator: " ")
+        while joined.contains("  ") {
+            joined = joined.replacingOccurrences(of: "  ", with: " ")
+        }
+        joined = joined.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let first = joined.first, first.isLowercase {
+            joined = String(first).uppercased() + joined.dropFirst()
+        }
+        return joined.isEmpty ? text : joined
     }
 }
