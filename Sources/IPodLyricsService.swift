@@ -64,21 +64,23 @@ final class IPodLyricsService {
                 return
             }
 
-            let hasNonLatin = valid.lines.contains { self.containsNonLatinLetters($0.text) }
+            let sanitizedLines = valid.lines.map { line -> IPodLyricLine in
+                let cleaned = self.stripInlineBackingVocalsIfNeeded(line.text)
+                return IPodLyricLine(time: line.time, text: cleaned)
+            }
+
+            let hasNonLatin = sanitizedLines.contains { self.containsNonLatinLetters($0.text) }
             guard hasNonLatin else {
-                let cleanedLines = valid.lines.map {
-                    IPodLyricLine(time: $0.time, text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines))
-                }
                 deliver(IPodTrackLyrics(
                     trackId: valid.trackId,
-                    lines: cleanedLines,
+                    lines: sanitizedLines,
                     isSynced: valid.isSynced,
                     source: valid.source
                 ))
                 return
             }
 
-            self.romanizeLinesAsync(valid.lines) { romanizedLines in
+            self.romanizeLinesAsync(sanitizedLines) { romanizedLines in
                 deliver(IPodTrackLyrics(
                     trackId: valid.trackId,
                     lines: romanizedLines,
@@ -476,6 +478,55 @@ final class IPodLyricsService {
         return (cleanTitle, cleanArtist)
     }
 
+    private func stripInlineBackingVocalsIfNeeded(_ rawText: String) -> String {
+        let singleLine = rawText
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard singleLine.contains("(") || singleLine.contains("（") else {
+            return singleLine
+        }
+
+        var stripped = singleLine
+        if let parenRegex = try? NSRegularExpression(pattern: "\\s*[\\(\\（][^\\)\\）]*[\\)\\）]", options: []) {
+            let range = NSRange(location: 0, length: (stripped as NSString).length)
+            stripped = parenRegex.stringByReplacingMatches(in: stripped, options: [], range: range, withTemplate: " ")
+        }
+
+        while stripped.contains("  ") {
+            stripped = stripped.replacingOccurrences(of: "  ", with: " ")
+        }
+        stripped = stripped
+            .replacingOccurrences(of: " ,", with: ",")
+            .replacingOccurrences(of: " ،", with: "،")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Keep standalone backing vocals if nothing meaningful remains outside parentheses
+        guard stripped.rangeOfCharacter(from: .alphanumerics) != nil else {
+            return singleLine
+        }
+        return stripped
+    }
+
+    private func sanitizeForGoogleTransliteration(_ text: String, isArabic: Bool) -> String {
+        var clean = text
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        if isArabic {
+            // Strip Arabic tatweel (ـ) and dammatan/kasratan (ٌ ٍ) that cause unvocalized consonant dumps
+            clean = clean
+                .replacingOccurrences(of: "\u{0640}", with: "")
+                .replacingOccurrences(of: "\u{064C}", with: "")
+                .replacingOccurrences(of: "\u{064D}", with: "")
+        }
+        while clean.contains("  ") {
+            clean = clean.replacingOccurrences(of: "  ", with: " ")
+        }
+        return clean.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func containsNonLatinLetters(_ text: String) -> Bool {
         for scalar in text.unicodeScalars {
             if CharacterSet.letters.contains(scalar) && scalar.value > 0x024F {
@@ -525,10 +576,11 @@ final class IPodLyricsService {
         var remoteMap: [String: String] = [:]
 
         func enqueueBatches(for items: [String], sourceLang: String, isArabic: Bool) {
-            let batches = makeTransliterationBatches(items, maxLines: 30, maxUTF8Bytes: 1400)
+            let batches = makeTransliterationBatches(items, maxLines: 20, maxUTF8Bytes: 1000)
             for batch in batches {
                 group.enter()
-                fetchGoogleRomanizationBatch(batch, sourceLang: sourceLang) { translated in
+                let prepared = batch.map { sanitizeForGoogleTransliteration($0, isArabic: isArabic) }
+                fetchGoogleRomanizationBatch(prepared, sourceLang: sourceLang) { translated in
                     if let translated = translated, translated.count == batch.count {
                         mapLock.lock()
                         for (src, rawOut) in zip(batch, translated) {
@@ -606,7 +658,7 @@ final class IPodLyricsService {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 4.5
+        request.timeoutInterval = 7.0
         request.httpBody = bodyData
         request.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
@@ -676,11 +728,12 @@ final class IPodLyricsService {
                     let r = NSRange(location: 0, length: (fixed as NSString).length)
                     fixed = leadingApos.stringByReplacingMatches(in: fixed, options: [], range: r, withTemplate: "")
                 }
-                if let trailingDoubleA = try? NSRegularExpression(pattern: "aa(?=$|[^A-Za-z])", options: [.caseInsensitive]) {
+                if let trailingDoubleA = try? NSRegularExpression(pattern: "aa(?=$|[^A-Za-z]|[nNhH](?:$|[^A-Za-z]))", options: [.caseInsensitive]) {
                     let r = NSRange(location: 0, length: (fixed as NSString).length)
                     fixed = trailingDoubleA.stringByReplacingMatches(in: fixed, options: [], range: r, withTemplate: "a")
                 }
 
+                fixed = repairAbbreviatedArabicRomanToken(fixed)
                 adjustedTokens.append(fixed)
             }
             text = adjustedTokens.joined(separator: " ")
@@ -694,6 +747,157 @@ final class IPodLyricsService {
             text = String(first).uppercased() + text.dropFirst()
         }
         return text
+    }
+
+    private func repairAbbreviatedArabicRomanToken(_ token: String) -> String {
+        let punct = CharacterSet.punctuationCharacters.union(.symbols)
+        guard let lead = token.rangeOfCharacter(from: punct.inverted) else { return token }
+
+        let prefix = String(token[..<lead.lowerBound])
+        let rest = String(token[lead.lowerBound...])
+        let core: String
+        let suffix: String
+        if let trail = rest.rangeOfCharacter(from: punct.inverted, options: .backwards) {
+            core = String(rest[..<trail.upperBound])
+            suffix = String(rest[trail.upperBound...])
+        } else {
+            core = rest
+            suffix = ""
+        }
+
+        let lower = core.lowercased()
+        let quickFixes: [String: String] = [
+            "lyh": "leh", "aiyh": "eih", "iyh": "eih", "ayh": "eh",
+            "ryt": "reit", "shwy": "shway", "shwya": "shwayya",
+            "wyak": "wayyak", "wyaak": "wayyak", "wakwn": "wakun",
+            "hy": "hay", "dy": "day", "ry": "ray",
+            "wsfy": "wasfi", "wsfyy": "wasfi",
+            "yanbi": "ya nabi", "yarsul": "ya rasul",
+            "ktiyr": "kitir", "ktir": "kitir",
+            "msh": "mish", "kl": "kull", "mn": "min", "fy": "fi",
+            "bs": "bas", "bn": "bin", "fl": "fil",
+            "bhbk": "bahebbak", "hbyby": "habibi", "qlby": "qalbi", "rhmn": "rahman"
+        ]
+        if let replacement = quickFixes[lower] {
+            return prefix + replacement + suffix
+        }
+
+        let standardVowels = Set<Character>(["a", "e", "i", "o", "u"])
+        var work = lower
+
+        // Insert 'a' if word begins with a bare consonant + apostrophe (e.g. m'ak -> ma'ak)
+        let chars0 = Array(work)
+        if chars0.count >= 3 && !standardVowels.contains(chars0[0]) && chars0[0].isLetter && chars0[1] == "'" && chars0[2] != "'" {
+            work = String(chars0[0]) + "a'" + String(chars0.dropFirst(2))
+        }
+
+        // Convert 'w' surrounded by non-vowels into 'u' (e.g. nwr -> nur, wakwn -> wakun)
+        var wFixed = ""
+        let wChars = Array(work)
+        for i in 0..<wChars.count {
+            let c = wChars[i]
+            if c == "w" && i > 0 && i + 1 < wChars.count {
+                let prev = wChars[i - 1]
+                let next = wChars[i + 1]
+                if !standardVowels.contains(prev) && !standardVowels.contains(next) && next != "w" {
+                    wFixed.append("u")
+                    continue
+                }
+            }
+            wFixed.append(c)
+        }
+        work = wFixed
+
+        // Parse into phonetic units (treating sh, kh, gh, th, dh, ch, zh as single consonant units)
+        func splitUnits(_ s: String) -> [String] {
+            let digraphs: Set<String> = ["sh", "kh", "gh", "th", "dh", "ch", "zh"]
+            let arr = Array(s)
+            var units: [String] = []
+            var i = 0
+            while i < arr.count {
+                if i + 1 < arr.count {
+                    let pair = String([arr[i], arr[i + 1]])
+                    if digraphs.contains(pair) {
+                        units.append(pair)
+                        i += 2
+                        continue
+                    }
+                }
+                units.append(String(arr[i]))
+                i += 1
+            }
+            return units
+        }
+
+        func isVowelUnit(_ u: String) -> Bool {
+            return u.count == 1 && standardVowels.contains(u.first!)
+        }
+
+        func hasThreeConsonantCluster(_ units: [String]) -> Bool {
+            var run = 0
+            var prevUnit = ""
+            for u in units {
+                if isVowelUnit(u) || u == "'" {
+                    run = 0
+                    prevUnit = ""
+                } else {
+                    if u != prevUnit {
+                        run += 1
+                        if run >= 3 { return true }
+                    }
+                    prevUnit = u
+                }
+            }
+            return false
+        }
+
+        let hasAnyVowel = work.contains(where: { standardVowels.contains($0) })
+        var units = splitUnits(work)
+
+        // If a word lacks any standard vowel, voice 'y' appropriately first
+        if !hasAnyVowel && units.contains("y") {
+            for i in 0..<units.count {
+                if units[i] == "y" {
+                    if i == units.count - 1 && i > 0 {
+                        units[i] = units.count <= 2 ? "ay" : "i"
+                    } else if i > 0 && i + 1 < units.count {
+                        units[i] = "i"
+                    }
+                }
+            }
+            work = units.joined()
+            units = splitUnits(work)
+        }
+
+        let stillNoVowel = !work.contains(where: { standardVowels.contains($0) })
+        if stillNoVowel || hasThreeConsonantCluster(units) {
+            var rebuilt = ""
+            var run = 0
+            var prevUnit = ""
+            for (idx, u) in units.enumerated() {
+                let isVowel = isVowelUnit(u) || u == "'"
+                if !isVowel {
+                    if u != prevUnit {
+                        run += 1
+                    }
+                    let nextIsConsonant = (idx + 1 < units.count) && !isVowelUnit(units[idx + 1]) && units[idx + 1] != "'"
+                    // Break up consonant-only words or clusters >= 3 units (e.g. fjr -> fajr, wsf -> wasf)
+                    if run >= 2 && (stillNoVowel || nextIsConsonant) && idx > 0 {
+                        rebuilt += "a"
+                        run = 1
+                    }
+                    rebuilt += u
+                    prevUnit = u
+                } else {
+                    rebuilt += u
+                    run = 0
+                    prevUnit = ""
+                }
+            }
+            work = rebuilt
+        }
+
+        return prefix + work + suffix
     }
 
     private func romanizeLyricLineIfNeeded(_ text: String) -> String {
