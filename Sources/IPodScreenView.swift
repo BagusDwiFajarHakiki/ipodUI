@@ -635,7 +635,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lyricsContainerView.clipsToBounds = true
         lyricsContainerView.isHidden = true
         lyricsContainerView.alpha = 0.0
+        lyricsContainerView.isUserInteractionEnabled = true
         lyricsContainerView.translatesAutoresizingMaskIntoConstraints = false
+        let tapLyrics = UITapGestureRecognizer(target: self, action: #selector(handleLyricsTap))
+        lyricsContainerView.addGestureRecognizer(tapLyrics)
         nowPlayingContainer.addSubview(lyricsContainerView)
 
         lyricsSlotsContainer.backgroundColor = .clear
@@ -686,6 +689,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         sleepTargetLabel.text = "OFF"
         sleepTargetLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
         sleepTargetLabel.textAlignment = .right
+        sleepTargetLabel.adjustsFontSizeToFitWidth = true
+        sleepTargetLabel.minimumScaleFactor = 0.8
         sleepTargetLabel.isHidden = true
         sleepTargetLabel.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(sleepTargetLabel)
@@ -1761,6 +1766,35 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         renderLyricSlots(animatedDirection: newCenter > oldCenter ? 1 : -1)
     }
 
+    @objc private func handleLyricsTap() {
+        guard barMode == .lyrics,
+              !nowPlayingContainer.isHidden,
+              let lyrics = currentLyrics,
+              lyrics.isSynced,
+              !lyrics.lines.isEmpty else { return }
+
+        let smoothElapsed = currentSmoothLyricsElapsed()
+        let targetIndex = min(max(0, activeLyricIndex ?? computeActiveLyricIndex(for: smoothElapsed) ?? 0), lyrics.lines.count - 1)
+        let oldCenter = displayLyricCenterIndex
+        let instActiveBefore = wasShowingInstrumentalSpinner
+
+        guard !isLyricsAutoScroll || oldCenter != targetIndex else { return }
+
+        isLyricsAutoScroll = true
+        displayLyricCenterIndex = targetIndex
+        let instActiveNow = instrumentalSpinnerState(at: smoothElapsed).active
+
+        let direction: Int
+        if targetIndex != oldCenter {
+            direction = targetIndex > oldCenter ? 1 : -1
+        } else if instActiveNow != instActiveBefore {
+            direction = -1
+        } else {
+            direction = 0
+        }
+        renderLyricSlots(animatedDirection: direction)
+    }
+
     private func updateLyricsDisplayLinkState() {
         let shouldRun = (barMode == .lyrics)
             && !nowPlayingContainer.isHidden
@@ -2409,9 +2443,15 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lastSleepElapsedSeconds = elapsedSeconds
         lastSleepActive = isActive
 
-        let displayElapsed = isActive ? max(0, elapsedSeconds) : 0
+        let totalSec = max(0, setMinutes * 60)
+        let displayElapsed = isActive ? min(max(0, elapsedSeconds), totalSec) : 0
         sleepCountdownLabel.text = formatTime(TimeInterval(displayElapsed))
-        sleepTargetLabel.text = setMinutes > 0 ? formatTime(TimeInterval(setMinutes * 60)) : "OFF"
+        if isActive && setMinutes > 0 {
+            let remaining = max(0, totalSec - displayElapsed)
+            sleepTargetLabel.text = "-\(formatTime(TimeInterval(remaining)))"
+        } else {
+            sleepTargetLabel.text = setMinutes > 0 ? formatTime(TimeInterval(totalSec)) : "OFF"
+        }
         updateSleepTimerColors()
 
         guard barMode == .sleepTimer, !isScrubbing else { return }
