@@ -484,11 +484,13 @@ final class IPodStreamingLibrary {
     private func extractPlainDescriptionLyrics(from root: Any) -> [(time: TimeInterval?, text: String)]? {
         if let dict = root as? [String: Any] {
             if let shelf = dict["musicDescriptionShelfRenderer"] as? [String: Any],
-               let descText = extractText(from: shelf["description"]) {
+               let descNode = shelf["description"],
+               let descText = extractText(from: descNode) {
+                let noneTime: TimeInterval? = nil
                 let lines = descText.components(separatedBy: .newlines)
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
-                    .map { (time: nil as TimeInterval?, text: $0) }
+                    .map { (time: noneTime, text: $0) }
                 if !lines.isEmpty { return lines }
             }
             for (_, val) in dict {

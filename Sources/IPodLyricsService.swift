@@ -107,7 +107,8 @@ final class IPodLyricsService {
 
     // MARK: - Local Embedded Lyrics
     private func extractLocalEmbeddedLyrics(for track: IPodTrack) -> IPodTrackLyrics? {
-        if let itemLyrics = track.mediaItem?.lyrics, !itemLyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let itemLyrics = track.mediaItem?.value(forProperty: MPMediaItemPropertyLyrics) as? String,
+           !itemLyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let parsed = parseLyricsText(itemLyrics)
             if !parsed.lines.isEmpty {
                 return IPodTrackLyrics(trackId: track.id, lines: parsed.lines, isSynced: parsed.isSynced, source: "Local")

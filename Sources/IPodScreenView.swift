@@ -404,7 +404,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     deinit {
         clockTimer?.invalidate()
-        smoothScrollDisplayLink?.invalidate()
+        displayLink?.invalidate()
         lyricsDisplayLink?.invalidate()
         NotificationCenter.default.removeObserver(self)
     }
