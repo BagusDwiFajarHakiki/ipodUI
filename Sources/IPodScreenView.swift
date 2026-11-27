@@ -2034,25 +2034,30 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             return 1.0
         }
 
+        let words = Double(max(1, lineText.split(separator: " ").count))
+        let chars = Double(lineText.count)
+        let slowVocalCap = max(4.2, words * 0.54 + chars * 0.045 + 1.10)
+
         let singingWindow: TimeInterval
-        let lead: TimeInterval
         if lyrics.lines.indices.contains(origIdx + 1), let nextT = lyrics.lines[origIdx + 1].time {
             let gap = max(0.45, nextT - start)
             if gap >= 18.0 {
-                // Mid-song break follows: finish singing highlight right before the inline loader arrives
-                singingWindow = estimatedVocalWindow(for: lineText)
-                lead = 0.0
+                // Mid-song break follows: finish singing highlight ahead of the inline loader
+                singingWindow = min(9.0, slowVocalCap)
+            } else if gap <= 4.5 {
+                singingWindow = max(0.42, gap * 0.84)
             } else {
-                // Track nearly the whole phrase for both fast rap/pop lines and long sustained notes
-                singingWindow = max(0.42, gap - min(0.28, gap * 0.06))
-                lead = gap <= 2.2 ? 0.06 : 0.0
+                // Keep slow lines responsive without stretching across trailing silence/breaths
+                let slowBudget = min(9.0, slowVocalCap + min(1.4, (gap - 4.5) * 0.20))
+                singingWindow = min(gap * 0.80, slowBudget)
             }
         } else {
             let remaining = max(1.0, lastDuration - start)
-            singingWindow = max(0.50, remaining - min(0.28, remaining * 0.06))
-            lead = remaining <= 2.2 ? 0.06 : 0.0
+            let slowBudget = min(9.0, slowVocalCap + min(1.4, max(0.0, remaining - 4.5) * 0.20))
+            singingWindow = min(remaining * 0.82, slowBudget)
         }
-        return min(max((elapsed + lead - start) / max(0.4, singingWindow), 0.0), 1.0)
+        let linear = min(max((elapsed + 0.12 - start) / max(0.4, singingWindow), 0.0), 1.0)
+        return pow(linear, 0.91)
     }
 
     private func interpolateColor(from c1: UIColor, to c2: UIColor, t: CGFloat) -> UIColor {
@@ -2162,11 +2167,11 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             if ch.isWhitespace {
                 w = 0.25
             } else if ch == "," || ch == ";" || ch == "—" || ch == "…" {
-                w = 1.35
+                w = 1.25
             } else if vowels.contains(ch) {
-                w = 1.45
+                w = 1.28
             } else if ch.isLetter {
-                w = 0.72
+                w = 0.85
             } else {
                 w = 0.45
             }
@@ -2174,8 +2179,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             cumWeights.append(running)
         }
 
-        let targetWeight = (-0.55 + (Double(ranges.count) + 1.55) * clampedProg) * (running / Double(ranges.count))
-        var cursor = -0.55 + (Double(ranges.count) + 1.55) * clampedProg
+        let targetWeight = (-0.15 + (Double(ranges.count) + 1.15) * clampedProg) * (running / Double(ranges.count))
+        var cursor = -0.15 + (Double(ranges.count) + 1.15) * clampedProg
         if running > 0 {
             var mappedIdx = Double(ranges.count)
             for (idx, cw) in cumWeights.enumerated() {
