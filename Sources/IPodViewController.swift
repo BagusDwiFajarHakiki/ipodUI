@@ -127,8 +127,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         IPodStreamingLibrary.shared.onTrackArtworkLoaded = { [weak self] trackId, image in
             guard let self = self else { return }
             self.screenView.updateCoverTrackArtwork(trackId: trackId, image: image)
-            if let qIdx = self.currentQueue.firstIndex(where: { $0.id == trackId }) {
+            let loadedVid = IPodStreamingLibrary.shared.videoId(forTrackId: trackId)
+            for qIdx in self.currentQueue.indices {
                 let old = self.currentQueue[qIdx]
+                let matchesId = (old.id == trackId)
+                let matchesVid = (loadedVid != nil && IPodStreamingLibrary.shared.videoId(for: old) == loadedVid)
+                guard matchesId || matchesVid else { continue }
                 let updated = IPodTrack(
                     id: old.id,
                     title: old.title,
@@ -144,13 +148,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                     self.playingTrackArtwork = image
                     self.updateAmbientGlow(from: image)
                     if self.isNowPlayingActive {
-                        self.screenView.showNowPlaying(
-                            track: updated,
-                            index: self.currentTrackIndex,
-                            total: self.currentQueue.count,
-                            transitionDirection: 0,
-                            animateFromCoverFlow: false
-                        )
+                        self.screenView.updateNowPlayingArtwork(image)
                     }
                     let elapsed = self.player.map { CMTimeGetSeconds($0.currentTime()) } ?? 0
                     self.updateNowPlayingInfo(track: updated, elapsed: elapsed.isFinite ? elapsed : 0)
@@ -861,15 +859,24 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                let matchedSongIdx = IPodMusicLibrary.shared.allTracks.firstIndex(where: { $0.id == currentQueue[currentTrackIndex].id }) {
                 activeIndex = matchedSongIdx
                 menuStack[menuStack.count - 1].selectedIndex = matchedSongIdx
+            } else if let top = menuStack.last, case .playlistTracks(let group) = top.node,
+                      currentQueue.indices.contains(currentTrackIndex),
+                      let matchedSongIdx = group.tracks.firstIndex(where: { $0.id == currentQueue[currentTrackIndex].id }) {
+                activeIndex = matchedSongIdx
+                menuStack[menuStack.count - 1].selectedIndex = matchedSongIdx
             } else if let top = menuStack.last, case .streamingSongs(let pageIndex) = top.node,
                       currentQueue.indices.contains(currentTrackIndex) {
-                let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
-                if let matchedIdx = pageData.tracks.firstIndex(where: { $0.id == currentQueue[currentTrackIndex].id }) {
-                    activeIndex = matchedIdx + 1
-                    menuStack[menuStack.count - 1].selectedIndex = activeIndex
-                } else {
-                    activeIndex = menuStack.last?.selectedIndex ?? (pageData.tracks.isEmpty ? 0 : 1)
-                }
+                let currentTrack = currentQueue[currentTrackIndex]
+                let prevSelectedItem = menuStack.last?.selectedIndex ?? 1
+                let preferredCatalogIdx = max(0, prevSelectedItem - 1) + 1 + (pageIndex * IPodStreamingLibrary.pageSize)
+                let matchedCatalogIdx = IPodStreamingLibrary.shared.ensureTrackInCatalog(
+                    currentTrack,
+                    preferredIndex: preferredCatalogIdx
+                )
+                let targetPage = matchedCatalogIdx / IPodStreamingLibrary.pageSize
+                let offsetInPage = (matchedCatalogIdx % IPodStreamingLibrary.pageSize) + 1
+                activeIndex = offsetInPage
+                menuStack[menuStack.count - 1] = (.streamingSongs(pageIndex: targetPage), offsetInPage)
             } else {
                 activeIndex = menuStack.last?.selectedIndex ?? 0
             }
@@ -1174,6 +1181,9 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         updateAmbientGlow(from: track.artworkImage)
         if !isWatchdogRetry {
             prefetchLyricsIfNeeded(for: track)
+            if track.id.hasPrefix("innertube_") {
+                IPodStreamingLibrary.shared.ensureArtworkLoaded(for: track)
+            }
         }
 
         if isNowPlayingActive && !isWatchdogRetry {

@@ -14,9 +14,9 @@ enum IPodColorTheme: CaseIterable {
 
     var displayName: String {
         switch self {
-        case .darkPod:     return "Dark"
-        case .sepiaPod:    return "SepiaPod"
-        case .classicBlue: return "Classic Blue"
+        case .darkPod:     return "Obsidian"
+        case .sepiaPod:    return "Sandstone"
+        case .classicBlue: return "Glacier"
         }
     }
 
@@ -147,7 +147,11 @@ class IPodMenuCell: UITableViewCell {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        contentView.layoutIfNeeded()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         highlightGradient.frame = cardBackground.bounds
+        CATransaction.commit()
     }
 
     func configure(row: IPodMenuRow, isSelected: Bool, isModernSettings: Bool, theme: IPodColorTheme) {
@@ -196,6 +200,13 @@ class IPodMenuCell: UITableViewCell {
                 badgeLabel.textColor = theme.primaryText
             }
         }
+
+        setNeedsLayout()
+        layoutIfNeeded()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        highlightGradient.frame = cardBackground.bounds
+        CATransaction.commit()
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -1064,6 +1075,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverFlowContainer.isHidden = true
         tableView.isHidden = false
         tableView.reloadData()
+        tableView.layoutIfNeeded()
         if !rows.isEmpty {
             tableView.scrollToRow(at: IndexPath(row: self.selectedIndex, section: 0), at: .none, animated: false)
         }
@@ -1412,6 +1424,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     func updateNowPlayingTrackIndex(_ index: Int, total: Int) {
         trackIndexLabel.text = "\(index + 1) / \(total)"
+    }
+
+    func updateNowPlayingArtwork(_ image: UIImage) {
+        artworkView.image = image
+        artworkReflectionView.image = image
+        onActiveCoverImageChanged?(image)
     }
 
     func showNowPlaying(track: IPodTrack, index: Int, total: Int, transitionDirection: Int = 0, animateFromCoverFlow: Bool = false) {

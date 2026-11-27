@@ -109,7 +109,17 @@ final class IPodStreamingLibrary {
     private var videoIdByTrackId: [String: String] = [:]
     private var thumbnailURLByTrackId: [String: String] = [:]
     private var resolvedStreamCache: [String: IPodResolvedStream] = [:]
-    private var artworkCache: [String: UIImage] = [:]
+    private var realArtworkByURL: [String: UIImage] = [:]
+    private var realArtworkByVideoId: [String: UIImage] = [:]
+    private var placeholderCache: [String: UIImage] = [:]
+    private var inFlightArtworkVideoIds = Set<String>()
+    private lazy var thumbnailSession: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.httpMaximumConnectionsPerHost = 6
+        cfg.timeoutIntervalForRequest = 7.0
+        cfg.requestCachePolicy = .returnCacheDataElseLoad
+        return URLSession(configuration: cfg)
+    }()
     private var visitorData: String?
     private var fetchGeneration: Int = 0
 
@@ -215,7 +225,7 @@ final class IPodStreamingLibrary {
 
             for (idx, entry) in cappedEntries.enumerated() {
                 let trackId = "innertube_\(entry.videoId)_\(idx)"
-                let placeholderArt = self.placeholderArtwork(seed: entry.videoId)
+                let initialArt = self.realArtworkByVideoId[entry.videoId] ?? self.placeholderArtwork(seed: entry.videoId)
                 let watchURL = URL(string: "https://m.youtube.com/watch?v=\(entry.videoId)")
                 let track = self.makeTrack(
                     id: trackId,
@@ -224,7 +234,7 @@ final class IPodStreamingLibrary {
                     album: entry.album,
                     duration: 210,
                     assetURL: watchURL,
-                    artworkImage: placeholderArt
+                    artworkImage: initialArt
                 )
                 tracks.append(track)
                 idMap[trackId] = entry.videoId
@@ -277,7 +287,7 @@ final class IPodStreamingLibrary {
 
             for (idx, entry) in shuffledLimited.enumerated() {
                 let trackId = "innertube_\(entry.videoId)_rec_\(idx)_\(Int.random(in: 100...999))"
-                let placeholderArt = self.placeholderArtwork(seed: entry.videoId)
+                let initialArt = self.realArtworkByVideoId[entry.videoId] ?? self.placeholderArtwork(seed: entry.videoId)
                 let watchURL = URL(string: "https://m.youtube.com/watch?v=\(entry.videoId)")
                 let recTrack = self.makeTrack(
                     id: trackId,
@@ -286,7 +296,7 @@ final class IPodStreamingLibrary {
                     album: entry.album,
                     duration: 210,
                     assetURL: watchURL,
-                    artworkImage: placeholderArt
+                    artworkImage: initialArt
                 )
                 recTracks.append(recTrack)
                 idMap[trackId] = entry.videoId
@@ -507,6 +517,10 @@ final class IPodStreamingLibrary {
 
     func invalidateCachedURL(for track: IPodTrack) {
         resolvedStreamCache.removeValue(forKey: track.id)
+    }
+
+    func videoId(forTrackId trackId: String) -> String? {
+        return videoIdByTrackId[trackId]
     }
 
     func videoId(for track: IPodTrack) -> String? {
@@ -778,6 +792,45 @@ final class IPodStreamingLibrary {
         }.resume()
     }
 
+    func ensureTrackInCatalog(_ track: IPodTrack, preferredIndex: Int) -> Int {
+        let targetVid = videoId(for: track)
+        if let existingIdx = allStreamingTracks.firstIndex(where: {
+            $0.id == track.id || (targetVid != nil && videoId(for: $0) == targetVid)
+        }) {
+            if let vid = targetVid, let realArt = realArtworkByVideoId[vid] {
+                replaceTrackArtwork(at: existingIdx, expectedId: allStreamingTracks[existingIdx].id, image: realArt)
+            } else if let art = track.artworkImage, track.id == allStreamingTracks[existingIdx].id {
+                replaceTrackArtwork(at: existingIdx, expectedId: allStreamingTracks[existingIdx].id, image: art)
+            }
+            return existingIdx
+        }
+
+        let insertIdx = min(max(0, preferredIndex), allStreamingTracks.count)
+        let resolvedTrack: IPodTrack
+        if let vid = targetVid, let realArt = realArtworkByVideoId[vid] {
+            resolvedTrack = makeTrack(
+                id: track.id,
+                title: track.title,
+                artist: track.artist,
+                album: track.album,
+                duration: track.duration,
+                assetURL: track.assetURL,
+                artworkImage: realArt
+            )
+        } else {
+            resolvedTrack = track
+        }
+
+        allStreamingTracks.insert(resolvedTrack, at: insertIdx)
+        if let vid = targetVid, !vid.isEmpty {
+            videoIdByTrackId[resolvedTrack.id] = vid
+        }
+        if targetVid.flatMap({ realArtworkByVideoId[$0] }) == nil {
+            ensureArtworkLoaded(for: resolvedTrack)
+        }
+        return insertIdx
+    }
+
     func tracksPage(pageIndex: Int) -> (tracks: [IPodTrack], currentPage: Int, totalPages: Int, hasNextPage: Bool) {
         let total = allStreamingTracks.count
         guard total > 0 else {
@@ -905,7 +958,7 @@ final class IPodStreamingLibrary {
 
             for (idx, entry) in cappedEntries.enumerated() {
                 let trackId = "innertube_\(entry.videoId)_\(idx)"
-                let placeholderArt = self.placeholderArtwork(seed: entry.videoId)
+                let initialArt = self.realArtworkByVideoId[entry.videoId] ?? self.placeholderArtwork(seed: entry.videoId)
                 let watchURL = URL(string: "https://m.youtube.com/watch?v=\(entry.videoId)")
                 let track = self.makeTrack(
                     id: trackId,
@@ -914,7 +967,7 @@ final class IPodStreamingLibrary {
                     album: entry.album,
                     duration: 210,
                     assetURL: watchURL,
-                    artworkImage: placeholderArt
+                    artworkImage: initialArt
                 )
                 tracks.append(track)
                 idMap[trackId] = entry.videoId
@@ -1197,36 +1250,52 @@ final class IPodStreamingLibrary {
     }
 
     private func upgradeThumbnailURL(_ urlStr: String) -> String {
-        var upgraded = urlStr
+        var upgraded = urlStr.trimmingCharacters(in: .whitespacesAndNewlines)
+        if upgraded.hasPrefix("//") {
+            upgraded = "https:" + upgraded
+        }
         if upgraded.contains("googleusercontent.com") {
             upgraded = upgraded.replacingOccurrences(
                 of: #"=w\d+-h\d+[^&\s]*"#,
-                with: "=w360-h360-l90-rj",
+                with: "=w240-h240-l80-rj",
                 options: .regularExpression
             )
             upgraded = upgraded.replacingOccurrences(
                 of: #"=s\d+[^&\s]*"#,
-                with: "=s360",
+                with: "=s240",
                 options: .regularExpression
             )
+        } else if upgraded.contains("ytimg.com/vi/") {
+            // Avoid heavy maxresdefault/sddefault JPEGs; mqdefault/hqdefault load much faster
+            upgraded = upgraded.replacingOccurrences(of: "/maxresdefault.", with: "/hqdefault.")
+            upgraded = upgraded.replacingOccurrences(of: "/sddefault.", with: "/hqdefault.")
         }
         return upgraded
     }
 
     private func extractThumbnailURL(from dict: [String: Any]) -> String? {
+        func pickBestThumb(from thumbs: [[String: Any]]) -> String? {
+            if let medium = thumbs.first(where: {
+                let w = ($0["width"] as? Int) ?? 0
+                return w >= 180 && w <= 480
+            }), let urlStr = medium["url"] as? String {
+                return upgradeThumbnailURL(urlStr)
+            }
+            if let last = thumbs.last, let urlStr = last["url"] as? String {
+                return upgradeThumbnailURL(urlStr)
+            }
+            return nil
+        }
+
         if let thumbObj = dict["thumbnail"] as? [String: Any],
            let musicThumb = thumbObj["musicThumbnailRenderer"] as? [String: Any],
            let innerThumb = musicThumb["thumbnail"] as? [String: Any],
-           let thumbs = innerThumb["thumbnails"] as? [[String: Any]],
-           let last = thumbs.last,
-           let urlStr = last["url"] as? String {
-            return upgradeThumbnailURL(urlStr)
+           let thumbs = innerThumb["thumbnails"] as? [[String: Any]] {
+            return pickBestThumb(from: thumbs)
         }
         if let thumbObj = dict["thumbnail"] as? [String: Any],
-           let thumbs = thumbObj["thumbnails"] as? [[String: Any]],
-           let last = thumbs.last,
-           let urlStr = last["url"] as? String {
-            return upgradeThumbnailURL(urlStr)
+           let thumbs = thumbObj["thumbnails"] as? [[String: Any]] {
+            return pickBestThumb(from: thumbs)
         }
         return nil
     }
@@ -1477,29 +1546,173 @@ final class IPodStreamingLibrary {
         )
     }
 
+    private func replaceAllCatalogTracksArtwork(videoId: String, image: UIImage) {
+        for idx in allStreamingTracks.indices {
+            let t = allStreamingTracks[idx]
+            if self.videoId(for: t) == videoId {
+                replaceTrackArtwork(at: idx, expectedId: t.id, image: image)
+            }
+        }
+    }
+
+    private func thumbnailCandidateURLs(for track: IPodTrack) -> [URL] {
+        var urls: [URL] = []
+        var seen = Set<String>()
+        func appendURL(_ s: String?) {
+            guard let s = s, !s.isEmpty, !seen.contains(s), let u = URL(string: s) else { return }
+            seen.insert(s)
+            urls.append(u)
+        }
+        appendURL(thumbnailURLByTrackId[track.id])
+        if let vid = videoId(for: track), !vid.isEmpty {
+            appendURL("https://i.ytimg.com/vi/\(vid)/mqdefault.jpg")
+            appendURL("https://i.ytimg.com/vi/\(vid)/hqdefault.jpg")
+        }
+        return urls
+    }
+
+    func ensureArtworkLoaded(for track: IPodTrack) {
+        guard let vid = videoId(for: track), !vid.isEmpty else { return }
+        if let cached = realArtworkByVideoId[vid] {
+            onTrackArtworkLoaded?(track.id, cached)
+            return
+        }
+        if let thumbStr = thumbnailURLByTrackId[track.id], let cached = realArtworkByURL[thumbStr] {
+            realArtworkByVideoId[vid] = cached
+            onTrackArtworkLoaded?(track.id, cached)
+            return
+        }
+        guard !inFlightArtworkVideoIds.contains(vid) else { return }
+        inFlightArtworkVideoIds.insert(vid)
+        let candidates = thumbnailCandidateURLs(for: track)
+        downloadThumbnailWithFallback(
+            candidates: candidates,
+            index: 0,
+            trackId: track.id,
+            videoId: vid,
+            updateMainCatalog: true
+        ) { [weak self] in
+            self?.inFlightArtworkVideoIds.remove(vid)
+        }
+    }
+
     private func loadLowResThumbnailsAsync(for tracks: [IPodTrack], updateMainCatalog: Bool) {
+        var pending: [(index: Int, track: IPodTrack, videoId: String, candidates: [URL])] = []
+
         for (idx, track) in tracks.enumerated() {
-            guard let thumbStr = thumbnailURLByTrackId[track.id],
-                  let url = URL(string: thumbStr) else { continue }
-            if let cached = artworkCache[thumbStr] {
+            guard let vid = videoId(for: track), !vid.isEmpty else { continue }
+            if let cached = realArtworkByVideoId[vid] {
                 if updateMainCatalog {
                     replaceTrackArtwork(at: idx, expectedId: track.id, image: cached)
                 }
                 onTrackArtworkLoaded?(track.id, cached)
                 continue
             }
-            URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-                guard let self = self, let data = data, let rawImg = UIImage(data: data) else { return }
-                let crispImg = self.downsampleImage(rawImg, targetSide: 320)
-                DispatchQueue.main.async {
-                    self.artworkCache[thumbStr] = crispImg
-                    if updateMainCatalog {
-                        self.replaceTrackArtwork(at: idx, expectedId: track.id, image: crispImg)
-                    }
-                    self.onTrackArtworkLoaded?(track.id, crispImg)
+            if let thumbStr = thumbnailURLByTrackId[track.id], let cached = realArtworkByURL[thumbStr] {
+                realArtworkByVideoId[vid] = cached
+                if updateMainCatalog {
+                    replaceTrackArtwork(at: idx, expectedId: track.id, image: cached)
                 }
-            }.resume()
+                onTrackArtworkLoaded?(track.id, cached)
+                continue
+            }
+            let candidates = thumbnailCandidateURLs(for: track)
+            if !candidates.isEmpty {
+                pending.append((idx, track, vid, candidates))
+            }
         }
+
+        guard !pending.isEmpty else { return }
+
+        // Bounded 6-worker queue so visible covers finish quickly without saturating connections
+        var cursor = 0
+        let queueLock = NSLock()
+        let workerCount = min(6, pending.count)
+
+        func runNext() {
+            queueLock.lock()
+            guard cursor < pending.count else {
+                queueLock.unlock()
+                return
+            }
+            let item = pending[cursor]
+            cursor += 1
+            queueLock.unlock()
+
+            DispatchQueue.main.async {
+                if let cached = self.realArtworkByVideoId[item.videoId] {
+                    if updateMainCatalog {
+                        self.replaceTrackArtwork(at: item.index, expectedId: item.track.id, image: cached)
+                    }
+                    self.onTrackArtworkLoaded?(item.track.id, cached)
+                    runNext()
+                    return
+                }
+                if self.inFlightArtworkVideoIds.contains(item.videoId) {
+                    runNext()
+                    return
+                }
+                self.inFlightArtworkVideoIds.insert(item.videoId)
+                self.downloadThumbnailWithFallback(
+                    candidates: item.candidates,
+                    index: 0,
+                    trackId: item.track.id,
+                    videoId: item.videoId,
+                    updateMainCatalog: updateMainCatalog
+                ) { [weak self] in
+                    self?.inFlightArtworkVideoIds.remove(item.videoId)
+                    runNext()
+                }
+            }
+        }
+
+        for _ in 0..<workerCount {
+            runNext()
+        }
+    }
+
+    private func downloadThumbnailWithFallback(
+        candidates: [URL],
+        index: Int,
+        trackId: String,
+        videoId: String,
+        updateMainCatalog: Bool,
+        completion: @escaping () -> Void
+    ) {
+        guard candidates.indices.contains(index) else {
+            DispatchQueue.main.async { completion() }
+            return
+        }
+        let url = candidates[index]
+        thumbnailSession.dataTask(with: url) { [weak self] data, response, error in
+            guard let self = self else {
+                DispatchQueue.main.async { completion() }
+                return
+            }
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if error == nil, code == 200, let data = data, let rawImg = UIImage(data: data) {
+                let crispImg = self.downsampleImage(rawImg, targetSide: 220)
+                DispatchQueue.main.async {
+                    self.realArtworkByURL[url.absoluteString] = crispImg
+                    self.realArtworkByVideoId[videoId] = crispImg
+                    if updateMainCatalog {
+                        self.replaceAllCatalogTracksArtwork(videoId: videoId, image: crispImg)
+                    }
+                    self.onTrackArtworkLoaded?(trackId, crispImg)
+                    completion()
+                }
+                return
+            }
+
+            self.downloadThumbnailWithFallback(
+                candidates: candidates,
+                index: index + 1,
+                trackId: trackId,
+                videoId: videoId,
+                updateMainCatalog: updateMainCatalog,
+                completion: completion
+            )
+        }.resume()
     }
 
     private func downsampleImage(_ image: UIImage, targetSide: CGFloat) -> UIImage {
@@ -1527,11 +1740,11 @@ final class IPodStreamingLibrary {
     }
 
     private func placeholderArtwork(seed: String) -> UIImage? {
-        if let cached = artworkCache[seed] {
+        if let cached = placeholderCache[seed] {
             return cached
         }
         let hue = CGFloat(abs(seed.hashValue) % 360) / 360.0
-        let size = CGSize(width: 240, height: 240)
+        let size = CGSize(width: 200, height: 200)
         UIGraphicsBeginImageContextWithOptions(size, true, 1.0)
         defer { UIGraphicsEndImageContext() }
 
@@ -1539,7 +1752,7 @@ final class IPodStreamingLibrary {
         UIRectFill(CGRect(origin: .zero, size: size))
 
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: 72, weight: .bold),
+            .font: UIFont.systemFont(ofSize: 64, weight: .bold),
             .foregroundColor: UIColor.white
         ]
         let note = "♪"
@@ -1551,7 +1764,7 @@ final class IPodStreamingLibrary {
 
         let img = UIGraphicsGetImageFromCurrentImageContext()
         if let img = img {
-            artworkCache[seed] = img
+            placeholderCache[seed] = img
         }
         return img
     }
