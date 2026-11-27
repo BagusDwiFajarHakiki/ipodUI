@@ -261,6 +261,62 @@ class IPodCoverFlowCell: UICollectionViewCell {
     required init?(coder: NSCoder) { fatalError() }
 }
 
+final class IPodCircularLoadingView: UIView {
+    private let trackLayer = CAShapeLayer()
+    private let arcLayer = CAShapeLayer()
+    private(set) var isAnimating = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+
+        trackLayer.fillColor = UIColor.clear.cgColor
+        trackLayer.lineWidth = 2.4
+        layer.addSublayer(trackLayer)
+
+        arcLayer.fillColor = UIColor.clear.cgColor
+        arcLayer.lineWidth = 2.4
+        arcLayer.lineCap = .round
+        arcLayer.strokeStart = 0.0
+        arcLayer.strokeEnd = 0.72
+        layer.addSublayer(arcLayer)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let path = UIBezierPath(ovalIn: bounds.insetBy(dx: 2.0, dy: 2.0)).cgPath
+        trackLayer.frame = bounds
+        trackLayer.path = path
+        arcLayer.frame = bounds
+        arcLayer.path = path
+    }
+
+    func setColor(_ color: UIColor) {
+        trackLayer.strokeColor = color.withAlphaComponent(0.20).cgColor
+        arcLayer.strokeColor = color.withAlphaComponent(0.90).cgColor
+    }
+
+    func startAnimating() {
+        if isAnimating && arcLayer.animation(forKey: "spin") != nil { return }
+        isAnimating = true
+        let anim = CABasicAnimation(keyPath: "transform.rotation.z")
+        anim.fromValue = 0.0
+        anim.toValue = Double.pi * 2.0
+        anim.duration = 1.0
+        anim.repeatCount = .infinity
+        anim.isRemovedOnCompletion = false
+        arcLayer.add(anim, forKey: "spin")
+    }
+
+    func stopAnimating() {
+        isAnimating = false
+        arcLayer.removeAnimation(forKey: "spin")
+    }
+}
+
 class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
     var theme: IPodColorTheme = .darkPod {
         didSet { applyTheme() }
@@ -354,6 +410,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let lyricPrevLabel = UILabel()
     private let lyricCurrentLabel = UILabel()
     private let lyricNextLabel = UILabel()
+    private let instrumentalSpinnerView = IPodCircularLoadingView()
     private var titleNormalConstraints: [NSLayoutConstraint] = []
     private var titleLyricsConstraints: [NSLayoutConstraint] = []
     private let progressTouchArea = UIView()
@@ -389,7 +446,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private var lastLyricsSyncElapsed: TimeInterval = 0
     private var lastLyricsSyncTimestamp: CFTimeInterval = CACurrentMediaTime()
     private var lyricsDisplayLink: CADisplayLink?
-    private var lastBouncedLineIndex: Int?
+    private var wasShowingInstrumentalSpinner = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -587,6 +644,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lyricPrevLabel.setContentCompressionResistancePriority(.defaultHigh, for: .vertical)
         lyricNextLabel.setContentCompressionResistancePriority(.defaultHigh, for: .vertical)
 
+        instrumentalSpinnerView.isHidden = true
+        instrumentalSpinnerView.translatesAutoresizingMaskIntoConstraints = false
+        lyricsSlotsContainer.addSubview(instrumentalSpinnerView)
+
         elapsedLabel.text = "0:00"
         elapsedLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
         elapsedLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -771,10 +832,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             trackIndexLabel.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -18),
             trackIndexLabel.bottomAnchor.constraint(equalTo: artworkView.bottomAnchor, constant: -2),
 
-            lyricsContainerView.topAnchor.constraint(equalTo: artworkView.topAnchor, constant: -2),
+            lyricsContainerView.topAnchor.constraint(equalTo: artworkView.topAnchor),
+            lyricsContainerView.bottomAnchor.constraint(equalTo: artworkView.bottomAnchor),
             lyricsContainerView.leadingAnchor.constraint(equalTo: artworkView.trailingAnchor, constant: 10),
             lyricsContainerView.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -12),
-            lyricsContainerView.bottomAnchor.constraint(equalTo: progressTouchArea.topAnchor, constant: -4),
 
             lyricsSlotsContainer.topAnchor.constraint(equalTo: lyricsContainerView.topAnchor),
             lyricsSlotsContainer.bottomAnchor.constraint(equalTo: lyricsContainerView.bottomAnchor),
@@ -784,14 +845,20 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             lyricCurrentLabel.leadingAnchor.constraint(equalTo: lyricsSlotsContainer.leadingAnchor, constant: 2),
             lyricCurrentLabel.trailingAnchor.constraint(equalTo: lyricsSlotsContainer.trailingAnchor, constant: -2),
             lyricCurrentLabel.centerYAnchor.constraint(equalTo: lyricsSlotsContainer.centerYAnchor),
+            lyricCurrentLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 28),
 
             lyricPrevLabel.leadingAnchor.constraint(equalTo: lyricsSlotsContainer.leadingAnchor, constant: 2),
             lyricPrevLabel.trailingAnchor.constraint(equalTo: lyricsSlotsContainer.trailingAnchor, constant: -2),
-            lyricPrevLabel.bottomAnchor.constraint(equalTo: lyricCurrentLabel.topAnchor, constant: -10),
+            lyricPrevLabel.bottomAnchor.constraint(equalTo: lyricCurrentLabel.topAnchor, constant: -8),
 
             lyricNextLabel.leadingAnchor.constraint(equalTo: lyricsSlotsContainer.leadingAnchor, constant: 2),
             lyricNextLabel.trailingAnchor.constraint(equalTo: lyricsSlotsContainer.trailingAnchor, constant: -2),
-            lyricNextLabel.topAnchor.constraint(equalTo: lyricCurrentLabel.bottomAnchor, constant: 10),
+            lyricNextLabel.topAnchor.constraint(equalTo: lyricCurrentLabel.bottomAnchor, constant: 8),
+
+            instrumentalSpinnerView.centerXAnchor.constraint(equalTo: lyricsSlotsContainer.centerXAnchor),
+            instrumentalSpinnerView.centerYAnchor.constraint(equalTo: lyricsSlotsContainer.centerYAnchor),
+            instrumentalSpinnerView.widthAnchor.constraint(equalToConstant: 24),
+            instrumentalSpinnerView.heightAnchor.constraint(equalToConstant: 24),
 
             elapsedLabel.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 18),
             elapsedLabel.bottomAnchor.constraint(equalTo: nowPlayingContainer.bottomAnchor, constant: -16),
@@ -955,6 +1022,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         progressKnob.backgroundColor = theme == .darkPod ? .white : theme.highlightBottom
         tableView.reloadData()
         coverCollectionView.reloadData()
+        instrumentalSpinnerView.setColor(theme == .darkPod ? .white : theme.highlightBottom)
         renderLyricSlots(animatedDirection: 0)
     }
 
@@ -1510,11 +1578,11 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                 renderLyricSlots(animatedDirection: 0)
 
                 UIView.animate(
-                    withDuration: 0.34,
+                    withDuration: 0.58,
                     delay: 0,
-                    usingSpringWithDamping: 0.86,
-                    initialSpringVelocity: 0.25,
-                    options: [.curveEaseOut, .beginFromCurrentState],
+                    usingSpringWithDamping: 0.94,
+                    initialSpringVelocity: 0.12,
+                    options: [.curveEaseInOut, .beginFromCurrentState],
                     animations: {
                         self.nowPlayingContainer.layoutIfNeeded()
                         self.trackArtistLabel.alpha = 0.0
@@ -1539,11 +1607,11 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                 trackIndexLabel.alpha = 0.0
 
                 UIView.animate(
-                    withDuration: 0.34,
+                    withDuration: 0.58,
                     delay: 0,
-                    usingSpringWithDamping: 0.86,
-                    initialSpringVelocity: 0.25,
-                    options: [.curveEaseOut, .beginFromCurrentState],
+                    usingSpringWithDamping: 0.94,
+                    initialSpringVelocity: 0.12,
+                    options: [.curveEaseInOut, .beginFromCurrentState],
                     animations: {
                         self.nowPlayingContainer.layoutIfNeeded()
                         self.artworkReflectionView.alpha = 0.28
@@ -1559,8 +1627,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                 )
 
                 UIView.animate(
-                    withDuration: 0.36,
-                    delay: 0.10,
+                    withDuration: 0.45,
+                    delay: 0.18,
                     options: [.curveEaseOut, .beginFromCurrentState],
                     animations: {
                         self.trackArtistLabel.alpha = 1.0
@@ -1591,9 +1659,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lyricsLoadingTrackId = trackId
         lyricsUnavailableTrackId = nil
         activeLyricIndex = nil
-        lastBouncedLineIndex = nil
         displayLyricCenterIndex = 0
         isLyricsAutoScroll = true
+        wasShowingInstrumentalSpinner = false
         updateLyricsDisplayLinkState()
         renderLyricSlots(animatedDirection: 0)
     }
@@ -1609,9 +1677,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             currentLyrics = nil
             lyricsUnavailableTrackId = trackId
             activeLyricIndex = nil
-            lastBouncedLineIndex = nil
             displayLyricCenterIndex = 0
             isLyricsAutoScroll = true
+            wasShowingInstrumentalSpinner = false
             updateLyricsDisplayLinkState()
             renderLyricSlots(animatedDirection: 0)
             return
@@ -1620,7 +1688,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lyricsUnavailableTrackId = nil
         currentLyrics = lyrics
         isLyricsAutoScroll = true
-        lastBouncedLineIndex = nil
+        wasShowingInstrumentalSpinner = false
         activeLyricIndex = computeActiveLyricIndex(for: currentElapsed)
         displayLyricCenterIndex = activeLyricIndex ?? 0
         updateLyricsDisplayLinkState()
@@ -1659,6 +1727,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         } else {
             lyricsDisplayLink?.invalidate()
             lyricsDisplayLink = nil
+            if barMode != .lyrics || nowPlayingContainer.isHidden {
+                instrumentalSpinnerView.stopAnimating()
+            }
         }
     }
 
@@ -1669,7 +1740,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
         let smoothElapsed = lastLyricsSyncElapsed + (CACurrentMediaTime() - lastLyricsSyncTimestamp)
         updateLyricsPlaybackTime(smoothElapsed)
-        updateActiveLyricReadingEffect(elapsed: smoothElapsed)
+        let instActive = instrumentalSpinnerState(at: smoothElapsed).active
+        if instActive != wasShowingInstrumentalSpinner {
+            renderLyricSlots(animatedDirection: 0)
+        } else if !instActive {
+            updateActiveLyricReadingEffect(elapsed: smoothElapsed)
+        }
     }
 
     private func currentSmoothLyricsElapsed() -> TimeInterval {
@@ -1677,6 +1753,56 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             return lastLyricsSyncElapsed + (CACurrentMediaTime() - lastLyricsSyncTimestamp)
         }
         return lastLyricsSyncElapsed
+    }
+
+    private func isInstrumentalLineText(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.isEmpty { return true }
+        let markers: Set<String> = [
+            "♪", "♫", "🎵", "🎶", "...", "..", "~", "—", "-", "•", "•••",
+            "instrumental", "(instrumental)", "[instrumental]", "music", "(music)", "[music]"
+        ]
+        return markers.contains(trimmed)
+    }
+
+    private func instrumentalSpinnerState(at elapsed: TimeInterval) -> (active: Bool, prevIndex: Int?, nextIndex: Int?) {
+        guard let lyrics = currentLyrics, lyrics.isSynced, isLyricsAutoScroll, !lyrics.lines.isEmpty else {
+            return (false, nil, nil)
+        }
+
+        // Intro instrumental before the first synced lyric line begins
+        if activeLyricIndex == nil {
+            if let firstT = lyrics.lines.first?.time, elapsed + 0.15 < firstT, firstT >= 1.5 {
+                return (true, nil, 0)
+            }
+            return (false, nil, nil)
+        }
+
+        guard let actIdx = activeLyricIndex, lyrics.lines.indices.contains(actIdx) else {
+            return (false, nil, nil)
+        }
+
+        // Explicit instrumental cue line
+        if isInstrumentalLineText(lyrics.lines[actIdx].text) {
+            let prev = actIdx - 1 >= 0 ? actIdx - 1 : nil
+            let next = actIdx + 1 < lyrics.lines.count ? actIdx + 1 : nil
+            return (true, prev, next)
+        }
+
+        // Long instrumental gap between current line and next line
+        if lyrics.lines.indices.contains(actIdx + 1),
+           let start = lyrics.lines[actIdx].time,
+           let nextT = lyrics.lines[actIdx + 1].time {
+            let gap = nextT - start
+            if gap >= 10.0 {
+                let finishTime = start + min(6.2, gap * 0.48)
+                if elapsed >= finishTime + 0.6 && elapsed < nextT - 0.5 {
+                    return (true, actIdx, actIdx + 1)
+                }
+            }
+        }
+
+        return (false, nil, nil)
     }
 
     private func updateLyricsPlaybackTime(_ elapsed: TimeInterval) {
@@ -1816,7 +1942,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private func updateActiveLyricReadingEffect(elapsed: TimeInterval) {
         guard let lyrics = currentLyrics, lyrics.isSynced,
               let actIdx = activeLyricIndex,
-              lyrics.lines.indices.contains(actIdx) else { return }
+              lyrics.lines.indices.contains(actIdx),
+              !instrumentalSpinnerState(at: elapsed).active else { return }
 
         let centerIdx = min(max(0, displayLyricCenterIndex), lyrics.lines.count - 1)
         let targetLabel: UILabel?
@@ -1848,20 +1975,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         )
     }
 
-    private func animateActiveLyricBounce(on label: UILabel) {
-        label.transform = CGAffineTransform(translationX: 0, y: 2.5).scaledBy(x: 0.94, y: 0.94)
-        UIView.animate(
-            withDuration: 0.44,
-            delay: 0,
-            usingSpringWithDamping: 0.55,
-            initialSpringVelocity: 0.7,
-            options: [.allowUserInteraction, .beginFromCurrentState],
-            animations: {
-                label.transform = .identity
-            }
-        )
-    }
-
     private func renderLyricSlots(animatedDirection: Int) {
         guard let lyrics = currentLyrics, !lyrics.lines.isEmpty else {
             activeLyricSnapshot?.removeFromSuperview()
@@ -1869,6 +1982,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             lyricsSlotsContainer.layer.removeAllAnimations()
             lyricsSlotsContainer.transform = .identity
             lyricsSlotsContainer.alpha = 1.0
+            instrumentalSpinnerView.isHidden = true
+            instrumentalSpinnerView.stopAnimating()
+            wasShowingInstrumentalSpinner = false
 
             lyricPrevLabel.attributedText = nil
             lyricPrevLabel.text = ""
@@ -1887,9 +2003,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
 
         let lines = lyrics.lines
-        let centerIdx = min(max(0, displayLyricCenterIndex), lines.count - 1)
-        let prevIdx = centerIdx - 1
-        let nextIdx = centerIdx + 1
+        let smoothElapsed = currentSmoothLyricsElapsed()
+        let instState = instrumentalSpinnerState(at: smoothElapsed)
 
         var snapshot: UIView?
         if animatedDirection != 0 && barMode == .lyrics && !nowPlayingContainer.isHidden && lyricsContainerView.bounds.height > 10 {
@@ -1905,10 +2020,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             }
         }
 
-        let smoothElapsed = currentSmoothLyricsElapsed()
-        var bouncedLabel: UILabel?
-
-        func applySlotStyle(_ label: UILabel, index: Int?, isCenterSlot: Bool) {
+        func applySlotStyle(_ label: UILabel, index: Int?, isCenterSlot: Bool, forceDimmed: Bool = false) {
             guard let idx = index, lines.indices.contains(idx) else {
                 label.attributedText = nil
                 label.text = ""
@@ -1917,7 +2029,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             }
 
             let isSongActiveLine: Bool
-            if lyrics.isSynced {
+            if forceDimmed {
+                isSongActiveLine = false
+            } else if lyrics.isSynced {
                 isSongActiveLine = (activeLyricIndex == idx)
             } else {
                 isSongActiveLine = isCenterSlot
@@ -1949,7 +2063,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                     label.layer.shadowRadius = 6.0
                     label.layer.shadowOpacity = theme == .darkPod ? 0.80 : 0.48
                     label.layer.shadowOffset = .zero
-                    bouncedLabel = label
                 } else {
                     label.attributedText = nil
                     label.font = UIFont.systemFont(ofSize: 12.5, weight: .semibold)
@@ -1979,7 +2092,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                     label.layer.shadowRadius = 5.0
                     label.layer.shadowOpacity = theme == .darkPod ? 0.72 : 0.42
                     label.layer.shadowOffset = .zero
-                    bouncedLabel = label
                 } else {
                     label.attributedText = nil
                     label.font = UIFont.systemFont(ofSize: 10.5, weight: .medium)
@@ -1990,19 +2102,44 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             }
         }
 
-        applySlotStyle(lyricPrevLabel, index: prevIdx >= 0 ? prevIdx : nil, isCenterSlot: false)
-        applySlotStyle(lyricCurrentLabel, index: centerIdx, isCenterSlot: true)
-        applySlotStyle(lyricNextLabel, index: nextIdx < lines.count ? nextIdx : nil, isCenterSlot: false)
-        lyricsContainerView.layoutIfNeeded()
+        if instState.active {
+            let spinnerJustAppeared = !wasShowingInstrumentalSpinner
+            wasShowingInstrumentalSpinner = true
+            instrumentalSpinnerView.setColor(theme == .darkPod ? .white : theme.highlightBottom)
+            instrumentalSpinnerView.isHidden = false
+            if barMode == .lyrics && !nowPlayingContainer.isHidden {
+                instrumentalSpinnerView.startAnimating()
+                if spinnerJustAppeared {
+                    instrumentalSpinnerView.alpha = 0.0
+                    UIView.animate(withDuration: 0.25) {
+                        self.instrumentalSpinnerView.alpha = 1.0
+                    }
+                } else {
+                    instrumentalSpinnerView.alpha = 1.0
+                }
+            } else {
+                instrumentalSpinnerView.stopAnimating()
+            }
 
-        if let bounceTarget = bouncedLabel,
-           let actIdx = activeLyricIndex,
-           actIdx != lastBouncedLineIndex,
-           barMode == .lyrics,
-           !nowPlayingContainer.isHidden {
-            lastBouncedLineIndex = actIdx
-            animateActiveLyricBounce(on: bounceTarget)
+            lyricCurrentLabel.attributedText = nil
+            lyricCurrentLabel.text = ""
+            lyricCurrentLabel.layer.shadowOpacity = 0.0
+            applySlotStyle(lyricPrevLabel, index: instState.prevIndex, isCenterSlot: false, forceDimmed: true)
+            applySlotStyle(lyricNextLabel, index: instState.nextIndex, isCenterSlot: false, forceDimmed: true)
+        } else {
+            wasShowingInstrumentalSpinner = false
+            instrumentalSpinnerView.isHidden = true
+            instrumentalSpinnerView.stopAnimating()
+
+            let centerIdx = min(max(0, displayLyricCenterIndex), lines.count - 1)
+            let prevIdx = centerIdx - 1
+            let nextIdx = centerIdx + 1
+            applySlotStyle(lyricPrevLabel, index: prevIdx >= 0 ? prevIdx : nil, isCenterSlot: false)
+            applySlotStyle(lyricCurrentLabel, index: centerIdx, isCenterSlot: true)
+            applySlotStyle(lyricNextLabel, index: nextIdx < lines.count ? nextIdx : nil, isCenterSlot: false)
         }
+
+        lyricsContainerView.layoutIfNeeded()
 
         if let snap = snapshot {
             let offset: CGFloat = animatedDirection > 0 ? 30.0 : -30.0
@@ -2077,7 +2214,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lastLyricsSyncTimestamp = CACurrentMediaTime()
         updateLyricsPlaybackTime(elapsed)
         if barMode == .lyrics && !nowPlayingContainer.isHidden {
-            updateActiveLyricReadingEffect(elapsed: elapsed)
+            let instActive = instrumentalSpinnerState(at: elapsed).active
+            if instActive != wasShowingInstrumentalSpinner {
+                renderLyricSlots(animatedDirection: 0)
+            } else if !instActive {
+                updateActiveLyricReadingEffect(elapsed: elapsed)
+            }
         }
         if barMode != .duration && barMode != .lyrics { return }
         if isScrubbing && !fromScrub { return }
