@@ -2,8 +2,8 @@ import UIKit
 
 enum IPodNowPlayingBarMode {
     case duration
-    case volume
     case lyrics
+    case volume
     case sleepTimer
 }
 
@@ -264,7 +264,6 @@ class IPodCoverFlowCell: UICollectionViewCell {
 final class IPodCircularLoadingView: UIView {
     private let trackLayer = CAShapeLayer()
     private let arcLayer = CAShapeLayer()
-    private(set) var isAnimating = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -272,14 +271,14 @@ final class IPodCircularLoadingView: UIView {
         isUserInteractionEnabled = false
 
         trackLayer.fillColor = UIColor.clear.cgColor
-        trackLayer.lineWidth = 2.4
+        trackLayer.lineWidth = 2.6
         layer.addSublayer(trackLayer)
 
         arcLayer.fillColor = UIColor.clear.cgColor
-        arcLayer.lineWidth = 2.4
+        arcLayer.lineWidth = 2.6
         arcLayer.lineCap = .round
         arcLayer.strokeStart = 0.0
-        arcLayer.strokeEnd = 0.72
+        arcLayer.strokeEnd = 0.0
         layer.addSublayer(arcLayer)
     }
 
@@ -287,7 +286,15 @@ final class IPodCircularLoadingView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let path = UIBezierPath(ovalIn: bounds.insetBy(dx: 2.0, dy: 2.0)).cgPath
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let radius = max(1.0, min(bounds.width, bounds.height) / 2.0 - 2.0)
+        let path = UIBezierPath(
+            arcCenter: center,
+            radius: radius,
+            startAngle: -CGFloat.pi / 2.0,
+            endAngle: 1.5 * CGFloat.pi,
+            clockwise: true
+        ).cgPath
         trackLayer.frame = bounds
         trackLayer.path = path
         arcLayer.frame = bounds
@@ -295,25 +302,16 @@ final class IPodCircularLoadingView: UIView {
     }
 
     func setColor(_ color: UIColor) {
-        trackLayer.strokeColor = color.withAlphaComponent(0.20).cgColor
-        arcLayer.strokeColor = color.withAlphaComponent(0.90).cgColor
+        trackLayer.strokeColor = color.withAlphaComponent(0.22).cgColor
+        arcLayer.strokeColor = color.withAlphaComponent(0.92).cgColor
     }
 
-    func startAnimating() {
-        if isAnimating && arcLayer.animation(forKey: "spin") != nil { return }
-        isAnimating = true
-        let anim = CABasicAnimation(keyPath: "transform.rotation.z")
-        anim.fromValue = 0.0
-        anim.toValue = Double.pi * 2.0
-        anim.duration = 1.0
-        anim.repeatCount = .infinity
-        anim.isRemovedOnCompletion = false
-        arcLayer.add(anim, forKey: "spin")
-    }
-
-    func stopAnimating() {
-        isAnimating = false
-        arcLayer.removeAnimation(forKey: "spin")
+    func setProgress(_ progress: CGFloat) {
+        let clamped = min(max(progress, 0.0), 1.0)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        arcLayer.strokeEnd = clamped
+        CATransaction.commit()
     }
 }
 
@@ -407,9 +405,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let trackIndexLabel = UILabel()
     private let lyricsContainerView = UIView()
     private let lyricsSlotsContainer = UIView()
-    private let lyricPrevLabel = UILabel()
-    private let lyricCurrentLabel = UILabel()
-    private let lyricNextLabel = UILabel()
+    private let lyricStatusLabel = UILabel()
+    private var lyricLabelsByIndex: [Int: UILabel] = [:]
     private let instrumentalSpinnerView = IPodCircularLoadingView()
     private var titleNormalConstraints: [NSLayoutConstraint] = []
     private var titleLyricsConstraints: [NSLayoutConstraint] = []
@@ -441,12 +438,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private var activeLyricIndex: Int?
     private var displayLyricCenterIndex: Int = 0
     private var isLyricsAutoScroll: Bool = true
-    private weak var activeLyricSnapshot: UIView?
     private var isPlaybackRunningForLyrics: Bool = false
     private var lastLyricsSyncElapsed: TimeInterval = 0
     private var lastLyricsSyncTimestamp: CFTimeInterval = CACurrentMediaTime()
     private var lyricsDisplayLink: CADisplayLink?
     private var wasShowingInstrumentalSpinner = false
+    private var lastLyricsLayoutSize: CGSize = .zero
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -633,16 +630,13 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lyricsSlotsContainer.translatesAutoresizingMaskIntoConstraints = false
         lyricsContainerView.addSubview(lyricsSlotsContainer)
 
-        for lbl in [lyricPrevLabel, lyricCurrentLabel, lyricNextLabel] {
-            lbl.textAlignment = .center
-            lbl.numberOfLines = 0
-            lbl.lineBreakMode = .byWordWrapping
-            lbl.translatesAutoresizingMaskIntoConstraints = false
-            lyricsSlotsContainer.addSubview(lbl)
-        }
-        lyricCurrentLabel.setContentCompressionResistancePriority(.required, for: .vertical)
-        lyricPrevLabel.setContentCompressionResistancePriority(.defaultHigh, for: .vertical)
-        lyricNextLabel.setContentCompressionResistancePriority(.defaultHigh, for: .vertical)
+        lyricStatusLabel.textAlignment = .center
+        lyricStatusLabel.numberOfLines = 0
+        lyricStatusLabel.lineBreakMode = .byWordWrapping
+        lyricStatusLabel.font = UIFont.systemFont(ofSize: 12.0, weight: .semibold)
+        lyricStatusLabel.isHidden = true
+        lyricStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        lyricsSlotsContainer.addSubview(lyricStatusLabel)
 
         instrumentalSpinnerView.isHidden = true
         instrumentalSpinnerView.translatesAutoresizingMaskIntoConstraints = false
@@ -842,18 +836,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             lyricsSlotsContainer.leadingAnchor.constraint(equalTo: lyricsContainerView.leadingAnchor),
             lyricsSlotsContainer.trailingAnchor.constraint(equalTo: lyricsContainerView.trailingAnchor),
 
-            lyricCurrentLabel.leadingAnchor.constraint(equalTo: lyricsSlotsContainer.leadingAnchor, constant: 2),
-            lyricCurrentLabel.trailingAnchor.constraint(equalTo: lyricsSlotsContainer.trailingAnchor, constant: -2),
-            lyricCurrentLabel.centerYAnchor.constraint(equalTo: lyricsSlotsContainer.centerYAnchor),
-            lyricCurrentLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 28),
-
-            lyricPrevLabel.leadingAnchor.constraint(equalTo: lyricsSlotsContainer.leadingAnchor, constant: 2),
-            lyricPrevLabel.trailingAnchor.constraint(equalTo: lyricsSlotsContainer.trailingAnchor, constant: -2),
-            lyricPrevLabel.bottomAnchor.constraint(equalTo: lyricCurrentLabel.topAnchor, constant: -8),
-
-            lyricNextLabel.leadingAnchor.constraint(equalTo: lyricsSlotsContainer.leadingAnchor, constant: 2),
-            lyricNextLabel.trailingAnchor.constraint(equalTo: lyricsSlotsContainer.trailingAnchor, constant: -2),
-            lyricNextLabel.topAnchor.constraint(equalTo: lyricCurrentLabel.bottomAnchor, constant: 8),
+            lyricStatusLabel.leadingAnchor.constraint(equalTo: lyricsSlotsContainer.leadingAnchor, constant: 4),
+            lyricStatusLabel.trailingAnchor.constraint(equalTo: lyricsSlotsContainer.trailingAnchor, constant: -4),
+            lyricStatusLabel.centerYAnchor.constraint(equalTo: lyricsSlotsContainer.centerYAnchor),
 
             instrumentalSpinnerView.centerXAnchor.constraint(equalTo: lyricsSlotsContainer.centerXAnchor),
             instrumentalSpinnerView.centerYAnchor.constraint(equalTo: lyricsSlotsContainer.centerYAnchor),
@@ -971,6 +956,13 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             layout.sectionInset = UIEdgeInsets(top: 0, left: sideInset, bottom: 0, right: sideInset)
         }
         applyCoverFlowTransforms()
+        let curLyricsSize = lyricsContainerView.bounds.size
+        if curLyricsSize.width > 20 && curLyricsSize.height > 20 && curLyricsSize != lastLyricsLayoutSize {
+            lastLyricsLayoutSize = curLyricsSize
+            if barMode == .lyrics && !nowPlayingContainer.isHidden {
+                renderLyricSlots(animatedDirection: 0)
+            }
+        }
     }
 
     private func applyTheme() {
@@ -1670,6 +1662,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         if lyricsLoadingTrackId == trackId {
             lyricsLoadingTrackId = nil
         }
+        clearLyricPoolLabels(animated: false)
         lastLyricsSyncElapsed = currentElapsed
         lastLyricsSyncTimestamp = CACurrentMediaTime()
 
@@ -1727,9 +1720,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         } else {
             lyricsDisplayLink?.invalidate()
             lyricsDisplayLink = nil
-            if barMode != .lyrics || nowPlayingContainer.isHidden {
-                instrumentalSpinnerView.stopAnimating()
-            }
         }
     }
 
@@ -1740,10 +1730,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
         let smoothElapsed = lastLyricsSyncElapsed + (CACurrentMediaTime() - lastLyricsSyncTimestamp)
         updateLyricsPlaybackTime(smoothElapsed)
-        let instActive = instrumentalSpinnerState(at: smoothElapsed).active
-        if instActive != wasShowingInstrumentalSpinner {
-            renderLyricSlots(animatedDirection: 0)
-        } else if !instActive {
+        let instState = instrumentalSpinnerState(at: smoothElapsed)
+        if instState.active != wasShowingInstrumentalSpinner {
+            renderLyricSlots(animatedDirection: 1)
+        } else if instState.active {
+            instrumentalSpinnerView.setProgress(CGFloat(instState.progress))
+        } else {
             updateActiveLyricReadingEffect(elapsed: smoothElapsed)
         }
     }
@@ -1765,28 +1757,38 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         return markers.contains(trimmed)
     }
 
-    private func instrumentalSpinnerState(at elapsed: TimeInterval) -> (active: Bool, prevIndex: Int?, nextIndex: Int?) {
+    private func instrumentalSpinnerState(at elapsed: TimeInterval) -> (active: Bool, progress: Double, prevIndex: Int?, nextIndex: Int?) {
         guard let lyrics = currentLyrics, lyrics.isSynced, isLyricsAutoScroll, !lyrics.lines.isEmpty else {
-            return (false, nil, nil)
+            return (false, 0.0, nil, nil)
         }
 
         // Intro instrumental before the first synced lyric line begins
         if activeLyricIndex == nil {
             if let firstT = lyrics.lines.first?.time, elapsed + 0.15 < firstT, firstT >= 1.5 {
-                return (true, nil, 0)
+                let end = max(0.5, firstT - 0.15)
+                let prog = min(max(elapsed / end, 0.0), 1.0)
+                return (true, prog, nil, 0)
             }
-            return (false, nil, nil)
+            return (false, 0.0, nil, nil)
         }
 
         guard let actIdx = activeLyricIndex, lyrics.lines.indices.contains(actIdx) else {
-            return (false, nil, nil)
+            return (false, 0.0, nil, nil)
         }
 
         // Explicit instrumental cue line
         if isInstrumentalLineText(lyrics.lines[actIdx].text) {
+            let start = lyrics.lines[actIdx].time ?? elapsed
+            let end: TimeInterval
+            if lyrics.lines.indices.contains(actIdx + 1), let nextT = lyrics.lines[actIdx + 1].time {
+                end = max(start + 0.5, nextT - 0.15)
+            } else {
+                end = max(start + 0.5, lastDuration)
+            }
+            let prog = min(max((elapsed - start) / max(0.5, end - start), 0.0), 1.0)
             let prev = actIdx - 1 >= 0 ? actIdx - 1 : nil
             let next = actIdx + 1 < lyrics.lines.count ? actIdx + 1 : nil
-            return (true, prev, next)
+            return (true, prog, prev, next)
         }
 
         // Long instrumental gap between current line and next line
@@ -1795,14 +1797,16 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
            let nextT = lyrics.lines[actIdx + 1].time {
             let gap = nextT - start
             if gap >= 10.0 {
-                let finishTime = start + min(6.2, gap * 0.48)
-                if elapsed >= finishTime + 0.6 && elapsed < nextT - 0.5 {
-                    return (true, actIdx, actIdx + 1)
+                let gapStart = start + min(6.2, gap * 0.48) + 0.6
+                let gapEnd = max(gapStart + 0.5, nextT - 0.15)
+                if elapsed >= gapStart && elapsed < gapEnd {
+                    let prog = min(max((elapsed - gapStart) / max(0.5, gapEnd - gapStart), 0.0), 1.0)
+                    return (true, prog, actIdx, actIdx + 1)
                 }
             }
         }
 
-        return (false, nil, nil)
+        return (false, 0.0, nil, nil)
     }
 
     private func updateLyricsPlaybackTime(_ elapsed: TimeInterval) {
@@ -1822,11 +1826,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             return
         }
 
-        if let act = newActive, act != displayLyricCenterIndex {
+        if let act = newActive, (act != displayLyricCenterIndex || wasShowingInstrumentalSpinner) {
             let oldCenter = displayLyricCenterIndex
+            let wasInst = wasShowingInstrumentalSpinner
             displayLyricCenterIndex = act
             if barMode == .lyrics && !nowPlayingContainer.isHidden {
-                renderLyricSlots(animatedDirection: act > oldCenter ? 1 : -1)
+                renderLyricSlots(animatedDirection: (wasInst || act > oldCenter) ? 1 : -1)
             } else {
                 renderLyricSlots(animatedDirection: 0)
             }
@@ -1888,17 +1893,57 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         )
     }
 
+    private func lyricBaseFont() -> UIFont {
+        return UIFont.systemFont(ofSize: 13.0, weight: .bold)
+    }
+
+    private func lyricParagraphStyle(for font: UIFont) -> NSParagraphStyle {
+        let fixedLineHeight = ceil(font.lineHeight + 3.5)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.minimumLineHeight = fixedLineHeight
+        paragraph.maximumLineHeight = fixedLineHeight
+        paragraph.lineSpacing = 0
+        return paragraph
+    }
+
+    private func measureLyricLabelHeight(text: String, width: CGFloat) -> CGFloat {
+        let font = lyricBaseFont()
+        let paragraph = lyricParagraphStyle(for: font)
+        let rect = (text as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [
+                .font: font,
+                .paragraphStyle: paragraph
+            ],
+            context: nil
+        )
+        return max(ceil(font.lineHeight + 3.5), ceil(rect.height))
+    }
+
+    private func buildStaticLyricAttributedText(text: String, color: UIColor) -> NSAttributedString {
+        let font = lyricBaseFont()
+        let paragraph = lyricParagraphStyle(for: font)
+        return NSAttributedString(
+            string: text,
+            attributes: [
+                .font: font,
+                .foregroundColor: color,
+                .paragraphStyle: paragraph
+            ]
+        )
+    }
+
     private func buildKaraokeAttributedText(
         text: String,
-        font: UIFont,
         litColor: UIColor,
         dimmedColor: UIColor,
         progress: Double
     ) -> NSAttributedString {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        paragraph.lineBreakMode = .byWordWrapping
-        paragraph.lineSpacing = 2.5
+        let font = lyricBaseFont()
+        let paragraph = lyricParagraphStyle(for: font)
 
         let attr = NSMutableAttributedString(
             string: text,
@@ -1923,15 +1968,16 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         let cursor = Double(ranges.count) * clampedProg
 
         for (i, range) in ranges.enumerated() {
-            let rawT = (cursor - Double(i)) / 2.4 + 0.5
+            let rawT = (cursor - Double(i)) / 2.6 + 0.5
             let t = CGFloat(min(max(rawT, 0.0), 1.0))
             let color = interpolateColor(from: dimmedColor, to: litColor, t: t)
             attr.addAttribute(.foregroundColor, value: color, range: range)
 
-            if clampedProg > 0.01 && clampedProg < 0.99 {
+            // Smooth cosine micro-wave only around the active cursor; passed words settle at baseline 0
+            if clampedProg > 0.01 && clampedProg < 0.985 {
                 let dist = abs(cursor - Double(i))
-                if dist < 3.6 {
-                    let lift = CGFloat((1.0 - dist / 3.6) * 1.55)
+                if dist < 3.0 {
+                    let lift = CGFloat(0.5 * (1.0 + cos(Double.pi * dist / 3.0)) * 1.15)
                     attr.addAttribute(.baselineOffset, value: lift, range: range)
                 }
             }
@@ -1943,223 +1989,307 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         guard let lyrics = currentLyrics, lyrics.isSynced,
               let actIdx = activeLyricIndex,
               lyrics.lines.indices.contains(actIdx),
-              !instrumentalSpinnerState(at: elapsed).active else { return }
+              !instrumentalSpinnerState(at: elapsed).active,
+              let label = lyricLabelsByIndex[actIdx] else { return }
 
-        let centerIdx = min(max(0, displayLyricCenterIndex), lyrics.lines.count - 1)
-        let targetLabel: UILabel?
-        let font: UIFont
-        if actIdx == centerIdx {
-            targetLabel = lyricCurrentLabel
-            font = UIFont.systemFont(ofSize: 13.0, weight: .bold)
-        } else if actIdx == centerIdx - 1 {
-            targetLabel = lyricPrevLabel
-            font = UIFont.systemFont(ofSize: 11.5, weight: .bold)
-        } else if actIdx == centerIdx + 1 {
-            targetLabel = lyricNextLabel
-            font = UIFont.systemFont(ofSize: 11.5, weight: .bold)
-        } else {
-            targetLabel = nil
-            font = UIFont.systemFont(ofSize: 13.0, weight: .bold)
-        }
-
-        guard let label = targetLabel else { return }
         let litColor = theme == .darkPod ? UIColor.white : theme.highlightBottom
         let dimmedColor = (theme == .darkPod ? UIColor.white : theme.primaryText).withAlphaComponent(0.36)
         let prog = karaokeProgress(for: actIdx, elapsed: elapsed)
         label.attributedText = buildKaraokeAttributedText(
             text: lyrics.lines[actIdx].text,
-            font: font,
             litColor: litColor,
             dimmedColor: dimmedColor,
             progress: prog
         )
     }
 
+    private func makePoolLyricLabel() -> UILabel {
+        let label = UILabel()
+        label.numberOfLines = 0
+        label.lineBreakMode = .byWordWrapping
+        label.textAlignment = .center
+        label.font = lyricBaseFont()
+        label.layer.contentsScale = UIScreen.main.scale
+        return label
+    }
+
+    private func clearLyricPoolLabels(animated: Bool) {
+        let existing = lyricLabelsByIndex
+        lyricLabelsByIndex.removeAll()
+        for (_, label) in existing {
+            if animated {
+                UIView.animate(withDuration: 0.2, animations: {
+                    label.alpha = 0.0
+                }, completion: { _ in
+                    label.removeFromSuperview()
+                })
+            } else {
+                label.removeFromSuperview()
+            }
+        }
+    }
+
+    private func applyStyleToLyricLabel(
+        _ label: UILabel,
+        lineIndex: Int,
+        isCenterSlot: Bool,
+        forceDimmed: Bool,
+        smoothElapsed: TimeInterval
+    ) {
+        guard let lyrics = currentLyrics, lyrics.lines.indices.contains(lineIndex) else { return }
+        let lineText = lyrics.lines[lineIndex].text
+        let glowColor = (theme == .darkPod ? UIColor.white : theme.highlightTop).cgColor
+        let activeTextColor = theme == .darkPod ? UIColor.white : theme.highlightBottom
+        let activeDimmedColor = (theme == .darkPod ? UIColor.white : theme.primaryText).withAlphaComponent(0.36)
+
+        if lyrics.isSynced {
+            let isSongActiveLine = !forceDimmed && (activeLyricIndex == lineIndex)
+            if isSongActiveLine {
+                let prog = karaokeProgress(for: lineIndex, elapsed: smoothElapsed)
+                label.attributedText = buildKaraokeAttributedText(
+                    text: lineText,
+                    litColor: activeTextColor,
+                    dimmedColor: activeDimmedColor,
+                    progress: prog
+                )
+                label.layer.shadowColor = glowColor
+                label.layer.shadowRadius = isCenterSlot ? 6.0 : 5.0
+                label.layer.shadowOpacity = theme == .darkPod ? (isCenterSlot ? 0.80 : 0.72) : (isCenterSlot ? 0.48 : 0.42)
+                label.layer.shadowOffset = .zero
+            } else {
+                // Non-active lines remain gray/unhighlighted even when scrolled into the center slot
+                let grayColor = theme.secondaryText.withAlphaComponent(isCenterSlot ? 0.54 : 0.40)
+                label.attributedText = buildStaticLyricAttributedText(text: lineText, color: grayColor)
+                label.layer.shadowOpacity = 0.0
+            }
+        } else {
+            let plainColor = isCenterSlot
+                ? theme.primaryText.withAlphaComponent(0.88)
+                : theme.secondaryText.withAlphaComponent(0.40)
+            label.attributedText = buildStaticLyricAttributedText(text: lineText, color: plainColor)
+            label.layer.shadowOpacity = 0.0
+        }
+    }
+
     private func renderLyricSlots(animatedDirection: Int) {
         guard let lyrics = currentLyrics, !lyrics.lines.isEmpty else {
-            activeLyricSnapshot?.removeFromSuperview()
-            activeLyricSnapshot = nil
-            lyricsSlotsContainer.layer.removeAllAnimations()
-            lyricsSlotsContainer.transform = .identity
-            lyricsSlotsContainer.alpha = 1.0
+            clearLyricPoolLabels(animated: false)
             instrumentalSpinnerView.isHidden = true
-            instrumentalSpinnerView.stopAnimating()
+            instrumentalSpinnerView.setProgress(0.0)
+            instrumentalSpinnerView.transform = .identity
+            instrumentalSpinnerView.alpha = 1.0
             wasShowingInstrumentalSpinner = false
 
-            lyricPrevLabel.attributedText = nil
-            lyricPrevLabel.text = ""
-            lyricNextLabel.attributedText = nil
-            lyricNextLabel.text = ""
-            lyricCurrentLabel.attributedText = nil
-            lyricCurrentLabel.font = UIFont.systemFont(ofSize: 12.0, weight: .semibold)
-            lyricCurrentLabel.textColor = theme.secondaryText.withAlphaComponent(0.75)
-            lyricCurrentLabel.layer.shadowOpacity = 0.0
-            if lyricsLoadingTrackId != nil {
-                lyricCurrentLabel.text = "Mencari lirik..."
-            } else {
-                lyricCurrentLabel.text = "Lirik tidak tersedia"
-            }
+            lyricStatusLabel.isHidden = false
+            lyricStatusLabel.font = UIFont.systemFont(ofSize: 12.0, weight: .semibold)
+            lyricStatusLabel.textColor = theme.secondaryText.withAlphaComponent(0.75)
+            lyricStatusLabel.text = lyricsLoadingTrackId != nil ? "Mencari lirik..." : "Lirik tidak tersedia"
             return
         }
+
+        lyricStatusLabel.isHidden = true
+        let containerW = lyricsContainerView.bounds.width
+        let containerH = lyricsContainerView.bounds.height
+        guard containerW > 20 && containerH > 20 else { return }
+
+        let contentW = max(60.0, containerW - 4.0)
+        let centerX = containerW / 2.0
+        let sideScale: CGFloat = 0.79
+        let centerScale: CGFloat = 1.0
+        let slotGap: CGFloat = 8.0
 
         let lines = lyrics.lines
         let smoothElapsed = currentSmoothLyricsElapsed()
         let instState = instrumentalSpinnerState(at: smoothElapsed)
+        let shouldAnimate = (animatedDirection != 0) && (barMode == .lyrics) && !nowPlayingContainer.isHidden
+        let slideDelta: CGFloat = animatedDirection > 0 ? 26.0 : -26.0
 
-        var snapshot: UIView?
-        if animatedDirection != 0 && barMode == .lyrics && !nowPlayingContainer.isHidden && lyricsContainerView.bounds.height > 10 {
-            activeLyricSnapshot?.removeFromSuperview()
-            lyricsSlotsContainer.layer.removeAllAnimations()
-            lyricsSlotsContainer.transform = .identity
-            lyricsSlotsContainer.alpha = 1.0
-            if let snap = lyricsSlotsContainer.snapshotView(afterScreenUpdates: false) {
-                snap.frame = lyricsSlotsContainer.frame
-                lyricsContainerView.addSubview(snap)
-                activeLyricSnapshot = snap
-                snapshot = snap
-            }
+        struct TargetSlot {
+            let index: Int
+            let isCenter: Bool
+            let forceDimmed: Bool
+            let centerY: CGFloat
+            let scale: CGFloat
+            let height: CGFloat
         }
 
-        func applySlotStyle(_ label: UILabel, index: Int?, isCenterSlot: Bool, forceDimmed: Bool = false) {
-            guard let idx = index, lines.indices.contains(idx) else {
-                label.attributedText = nil
-                label.text = ""
-                label.layer.shadowOpacity = 0.0
-                return
-            }
-
-            let isSongActiveLine: Bool
-            if forceDimmed {
-                isSongActiveLine = false
-            } else if lyrics.isSynced {
-                isSongActiveLine = (activeLyricIndex == idx)
-            } else {
-                isSongActiveLine = isCenterSlot
-            }
-
-            let glowColor = (theme == .darkPod ? UIColor.white : theme.highlightTop).cgColor
-            let activeTextColor = theme == .darkPod ? UIColor.white : theme.highlightBottom
-            let activeDimmedColor = (theme == .darkPod ? UIColor.white : theme.primaryText).withAlphaComponent(0.36)
-
-            if isCenterSlot {
-                if isSongActiveLine {
-                    let font = UIFont.systemFont(ofSize: 13.0, weight: .bold)
-                    label.font = font
-                    if lyrics.isSynced {
-                        let prog = karaokeProgress(for: idx, elapsed: smoothElapsed)
-                        label.attributedText = buildKaraokeAttributedText(
-                            text: lines[idx].text,
-                            font: font,
-                            litColor: activeTextColor,
-                            dimmedColor: activeDimmedColor,
-                            progress: prog
-                        )
-                    } else {
-                        label.attributedText = nil
-                        label.text = lines[idx].text
-                        label.textColor = activeTextColor
-                    }
-                    label.layer.shadowColor = glowColor
-                    label.layer.shadowRadius = 6.0
-                    label.layer.shadowOpacity = theme == .darkPod ? 0.80 : 0.48
-                    label.layer.shadowOffset = .zero
-                } else {
-                    label.attributedText = nil
-                    label.font = UIFont.systemFont(ofSize: 12.5, weight: .semibold)
-                    label.text = lines[idx].text
-                    label.textColor = theme.primaryText.withAlphaComponent(0.72)
-                    label.layer.shadowOpacity = 0.0
-                }
-            } else {
-                if isSongActiveLine {
-                    let font = UIFont.systemFont(ofSize: 11.5, weight: .bold)
-                    label.font = font
-                    if lyrics.isSynced {
-                        let prog = karaokeProgress(for: idx, elapsed: smoothElapsed)
-                        label.attributedText = buildKaraokeAttributedText(
-                            text: lines[idx].text,
-                            font: font,
-                            litColor: activeTextColor,
-                            dimmedColor: activeDimmedColor,
-                            progress: prog
-                        )
-                    } else {
-                        label.attributedText = nil
-                        label.text = lines[idx].text
-                        label.textColor = activeTextColor
-                    }
-                    label.layer.shadowColor = glowColor
-                    label.layer.shadowRadius = 5.0
-                    label.layer.shadowOpacity = theme == .darkPod ? 0.72 : 0.42
-                    label.layer.shadowOffset = .zero
-                } else {
-                    label.attributedText = nil
-                    label.font = UIFont.systemFont(ofSize: 10.5, weight: .medium)
-                    label.text = lines[idx].text
-                    label.textColor = theme.secondaryText.withAlphaComponent(0.42)
-                    label.layer.shadowOpacity = 0.0
-                }
-            }
-        }
+        var targets: [TargetSlot] = []
+        var animateSpinnerIn = false
+        var animateSpinnerOut = false
 
         if instState.active {
             let spinnerJustAppeared = !wasShowingInstrumentalSpinner
             wasShowingInstrumentalSpinner = true
+            instrumentalSpinnerView.layer.removeAllAnimations()
             instrumentalSpinnerView.setColor(theme == .darkPod ? .white : theme.highlightBottom)
+            instrumentalSpinnerView.setProgress(CGFloat(instState.progress))
             instrumentalSpinnerView.isHidden = false
-            if barMode == .lyrics && !nowPlayingContainer.isHidden {
-                instrumentalSpinnerView.startAnimating()
-                if spinnerJustAppeared {
-                    instrumentalSpinnerView.alpha = 0.0
-                    UIView.animate(withDuration: 0.25) {
-                        self.instrumentalSpinnerView.alpha = 1.0
-                    }
-                } else {
-                    instrumentalSpinnerView.alpha = 1.0
-                }
+
+            if spinnerJustAppeared && shouldAnimate {
+                instrumentalSpinnerView.transform = CGAffineTransform(translationX: 0, y: 18.0).scaledBy(x: 0.72, y: 0.72)
+                instrumentalSpinnerView.alpha = 0.0
+                animateSpinnerIn = true
             } else {
-                instrumentalSpinnerView.stopAnimating()
+                instrumentalSpinnerView.transform = .identity
+                instrumentalSpinnerView.alpha = 1.0
             }
 
-            lyricCurrentLabel.attributedText = nil
-            lyricCurrentLabel.text = ""
-            lyricCurrentLabel.layer.shadowOpacity = 0.0
-            applySlotStyle(lyricPrevLabel, index: instState.prevIndex, isCenterSlot: false, forceDimmed: true)
-            applySlotStyle(lyricNextLabel, index: instState.nextIndex, isCenterSlot: false, forceDimmed: true)
+            let spinnerCenterY = containerH / 2.0
+            if let prevIdx = instState.prevIndex, lines.indices.contains(prevIdx) {
+                let h = measureLyricLabelHeight(text: lines[prevIdx].text, width: contentW)
+                let y = (spinnerCenterY - 12.0 - slotGap) - (h * sideScale) / 2.0
+                targets.append(TargetSlot(index: prevIdx, isCenter: false, forceDimmed: true, centerY: y, scale: sideScale, height: h))
+            }
+            if let nextIdx = instState.nextIndex, lines.indices.contains(nextIdx) {
+                let h = measureLyricLabelHeight(text: lines[nextIdx].text, width: contentW)
+                let y = (spinnerCenterY + 12.0 + slotGap) + (h * sideScale) / 2.0
+                targets.append(TargetSlot(index: nextIdx, isCenter: false, forceDimmed: true, centerY: y, scale: sideScale, height: h))
+            }
         } else {
+            let justExitedSpinner = wasShowingInstrumentalSpinner
             wasShowingInstrumentalSpinner = false
-            instrumentalSpinnerView.isHidden = true
-            instrumentalSpinnerView.stopAnimating()
+
+            if justExitedSpinner && shouldAnimate {
+                instrumentalSpinnerView.layer.removeAllAnimations()
+                instrumentalSpinnerView.setProgress(1.0)
+                instrumentalSpinnerView.isHidden = false
+                instrumentalSpinnerView.transform = .identity
+                instrumentalSpinnerView.alpha = 1.0
+                animateSpinnerOut = true
+            } else {
+                instrumentalSpinnerView.isHidden = true
+                instrumentalSpinnerView.setProgress(0.0)
+                instrumentalSpinnerView.transform = .identity
+                instrumentalSpinnerView.alpha = 1.0
+            }
 
             let centerIdx = min(max(0, displayLyricCenterIndex), lines.count - 1)
+            let midH = measureLyricLabelHeight(text: lines[centerIdx].text, width: contentW)
+            let midCenterY = containerH / 2.0
+            targets.append(TargetSlot(index: centerIdx, isCenter: true, forceDimmed: false, centerY: midCenterY, scale: centerScale, height: midH))
+
             let prevIdx = centerIdx - 1
+            if prevIdx >= 0 && lines.indices.contains(prevIdx) {
+                let prevH = measureLyricLabelHeight(text: lines[prevIdx].text, width: contentW)
+                let prevCenterY = (midCenterY - (midH * centerScale) / 2.0) - slotGap - (prevH * sideScale) / 2.0
+                targets.append(TargetSlot(index: prevIdx, isCenter: false, forceDimmed: false, centerY: prevCenterY, scale: sideScale, height: prevH))
+            }
+
             let nextIdx = centerIdx + 1
-            applySlotStyle(lyricPrevLabel, index: prevIdx >= 0 ? prevIdx : nil, isCenterSlot: false)
-            applySlotStyle(lyricCurrentLabel, index: centerIdx, isCenterSlot: true)
-            applySlotStyle(lyricNextLabel, index: nextIdx < lines.count ? nextIdx : nil, isCenterSlot: false)
+            if nextIdx < lines.count {
+                let nextH = measureLyricLabelHeight(text: lines[nextIdx].text, width: contentW)
+                let nextCenterY = (midCenterY + (midH * centerScale) / 2.0) + slotGap + (nextH * sideScale) / 2.0
+                targets.append(TargetSlot(index: nextIdx, isCenter: false, forceDimmed: false, centerY: nextCenterY, scale: sideScale, height: nextH))
+            }
         }
 
-        lyricsContainerView.layoutIfNeeded()
+        let targetIndices = Set(targets.map { $0.index })
 
-        if let snap = snapshot {
-            let offset: CGFloat = animatedDirection > 0 ? 30.0 : -30.0
-            lyricsSlotsContainer.transform = CGAffineTransform(translationX: 0, y: offset)
-            lyricsSlotsContainer.alpha = 0.15
+        // Exit labels that are no longer visible
+        let leavingIndices = lyricLabelsByIndex.keys.filter { !targetIndices.contains($0) }
+        for idx in leavingIndices {
+            guard let oldLabel = lyricLabelsByIndex.removeValue(forKey: idx) else { continue }
+            if shouldAnimate {
+                UIView.animate(
+                    withDuration: 0.30,
+                    delay: 0,
+                    options: [.curveEaseOut, .beginFromCurrentState],
+                    animations: {
+                        oldLabel.center = CGPoint(x: oldLabel.center.x, y: oldLabel.center.y - slideDelta)
+                        oldLabel.transform = CGAffineTransform(scaleX: 0.72, y: 0.72)
+                        oldLabel.alpha = 0.0
+                    },
+                    completion: { _ in
+                        oldLabel.removeFromSuperview()
+                    }
+                )
+            } else {
+                oldLabel.removeFromSuperview()
+            }
+        }
 
+        // Prepare newly entering labels and update all target labels
+        var newlyCreated: [(UILabel, TargetSlot)] = []
+        var existingUpdates: [(UILabel, TargetSlot)] = []
+
+        for slot in targets {
+            if let existing = lyricLabelsByIndex[slot.index] {
+                existing.bounds = CGRect(x: 0, y: 0, width: contentW, height: slot.height)
+                applyStyleToLyricLabel(
+                    existing,
+                    lineIndex: slot.index,
+                    isCenterSlot: slot.isCenter,
+                    forceDimmed: slot.forceDimmed,
+                    smoothElapsed: smoothElapsed
+                )
+                existingUpdates.append((existing, slot))
+            } else {
+                let created = makePoolLyricLabel()
+                created.bounds = CGRect(x: 0, y: 0, width: contentW, height: slot.height)
+                applyStyleToLyricLabel(
+                    created,
+                    lineIndex: slot.index,
+                    isCenterSlot: slot.isCenter,
+                    forceDimmed: slot.forceDimmed,
+                    smoothElapsed: smoothElapsed
+                )
+                lyricsSlotsContainer.addSubview(created)
+                lyricLabelsByIndex[slot.index] = created
+
+                if shouldAnimate {
+                    created.center = CGPoint(x: centerX, y: slot.centerY + slideDelta)
+                    created.transform = CGAffineTransform(scaleX: 0.74, y: 0.74)
+                    created.alpha = 0.0
+                    newlyCreated.append((created, slot))
+                } else {
+                    created.center = CGPoint(x: centerX, y: slot.centerY)
+                    created.transform = CGAffineTransform(scaleX: slot.scale, y: slot.scale)
+                    created.alpha = 1.0
+                }
+            }
+        }
+
+        if shouldAnimate {
             UIView.animate(
-                withDuration: 0.24,
+                withDuration: 0.38,
                 delay: 0,
-                options: [.curveEaseOut],
+                usingSpringWithDamping: 0.90,
+                initialSpringVelocity: 0.16,
+                options: [.curveEaseOut, .beginFromCurrentState],
                 animations: {
-                    self.lyricsSlotsContainer.transform = .identity
-                    self.lyricsSlotsContainer.alpha = 1.0
-                    snap.transform = CGAffineTransform(translationX: 0, y: -offset)
-                    snap.alpha = 0.0
+                    for (lbl, slot) in existingUpdates {
+                        lbl.center = CGPoint(x: centerX, y: slot.centerY)
+                        lbl.transform = CGAffineTransform(scaleX: slot.scale, y: slot.scale)
+                        lbl.alpha = 1.0
+                    }
+                    for (lbl, slot) in newlyCreated {
+                        lbl.center = CGPoint(x: centerX, y: slot.centerY)
+                        lbl.transform = CGAffineTransform(scaleX: slot.scale, y: slot.scale)
+                        lbl.alpha = 1.0
+                    }
+                    if animateSpinnerIn {
+                        self.instrumentalSpinnerView.transform = .identity
+                        self.instrumentalSpinnerView.alpha = 1.0
+                    } else if animateSpinnerOut {
+                        self.instrumentalSpinnerView.transform = CGAffineTransform(translationX: 0, y: -18.0).scaledBy(x: 0.68, y: 0.68)
+                        self.instrumentalSpinnerView.alpha = 0.0
+                    }
                 },
                 completion: { _ in
-                    snap.removeFromSuperview()
+                    if animateSpinnerOut && !self.wasShowingInstrumentalSpinner {
+                        self.instrumentalSpinnerView.isHidden = true
+                        self.instrumentalSpinnerView.setProgress(0.0)
+                        self.instrumentalSpinnerView.transform = .identity
+                        self.instrumentalSpinnerView.alpha = 1.0
+                    }
                 }
             )
+        } else {
+            for (lbl, slot) in existingUpdates {
+                lbl.center = CGPoint(x: centerX, y: slot.centerY)
+                lbl.transform = CGAffineTransform(scaleX: slot.scale, y: slot.scale)
+                lbl.alpha = 1.0
+            }
         }
     }
 
@@ -2214,10 +2344,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lastLyricsSyncTimestamp = CACurrentMediaTime()
         updateLyricsPlaybackTime(elapsed)
         if barMode == .lyrics && !nowPlayingContainer.isHidden {
-            let instActive = instrumentalSpinnerState(at: elapsed).active
-            if instActive != wasShowingInstrumentalSpinner {
-                renderLyricSlots(animatedDirection: 0)
-            } else if !instActive {
+            let instState = instrumentalSpinnerState(at: elapsed)
+            if instState.active != wasShowingInstrumentalSpinner {
+                renderLyricSlots(animatedDirection: 1)
+            } else if instState.active {
+                instrumentalSpinnerView.setProgress(CGFloat(instState.progress))
+            } else {
                 updateActiveLyricReadingEffect(elapsed: elapsed)
             }
         }

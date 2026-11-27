@@ -883,10 +883,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         if isNowPlayingActive {
             switch nowPlayingBarMode {
             case .duration:
-                nowPlayingBarMode = .volume
-            case .volume:
                 nowPlayingBarMode = .lyrics
             case .lyrics:
+                nowPlayingBarMode = .volume
+            case .volume:
                 nowPlayingBarMode = .sleepTimer
             case .sleepTimer:
                 nowPlayingBarMode = .duration
