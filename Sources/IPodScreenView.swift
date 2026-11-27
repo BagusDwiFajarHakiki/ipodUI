@@ -2102,12 +2102,29 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
     }
 
+    private func animateLyricShadowOpacity(_ layer: CALayer, to targetOpacity: Float, duration: CFTimeInterval, animated: Bool) {
+        let currentOpacity = layer.presentation()?.shadowOpacity ?? layer.shadowOpacity
+        if animated && abs(currentOpacity - targetOpacity) > 0.01 {
+            let anim = CABasicAnimation(keyPath: "shadowOpacity")
+            anim.fromValue = currentOpacity
+            anim.toValue = targetOpacity
+            anim.duration = duration
+            anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(anim, forKey: "lyricShadowOpacity")
+        } else {
+            layer.removeAnimation(forKey: "lyricShadowOpacity")
+        }
+        layer.shadowOpacity = targetOpacity
+    }
+
     private func applyStyleToLyricLabel(
         _ label: UILabel,
         lineIndex: Int,
         isCenterSlot: Bool,
         forceDimmed: Bool,
-        smoothElapsed: TimeInterval
+        smoothElapsed: TimeInterval,
+        animateShadow: Bool = false,
+        transitionDuration: CFTimeInterval = 0.56
     ) {
         guard let lyrics = currentLyrics, lyrics.lines.indices.contains(lineIndex) else { return }
         let lineText = lyrics.lines[lineIndex].text
@@ -2127,20 +2144,21 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                 )
                 label.layer.shadowColor = glowColor
                 label.layer.shadowRadius = isCenterSlot ? 6.0 : 5.0
-                label.layer.shadowOpacity = theme == .darkPod ? (isCenterSlot ? 0.80 : 0.72) : (isCenterSlot ? 0.48 : 0.42)
                 label.layer.shadowOffset = .zero
+                let targetShadow: Float = theme == .darkPod ? (isCenterSlot ? 0.80 : 0.72) : (isCenterSlot ? 0.48 : 0.42)
+                animateLyricShadowOpacity(label.layer, to: targetShadow, duration: transitionDuration, animated: animateShadow)
             } else {
                 // Non-active lines remain gray/unhighlighted even when scrolled into the center slot
-                let grayColor = theme.secondaryText.withAlphaComponent(isCenterSlot ? 0.54 : 0.40)
+                let grayColor = theme.secondaryText.withAlphaComponent(isCenterSlot ? 0.62 : 0.48)
                 label.attributedText = buildStaticLyricAttributedText(text: lineText, color: grayColor)
-                label.layer.shadowOpacity = 0.0
+                animateLyricShadowOpacity(label.layer, to: 0.0, duration: transitionDuration, animated: animateShadow)
             }
         } else {
             let plainColor = isCenterSlot
                 ? theme.primaryText.withAlphaComponent(0.88)
-                : theme.secondaryText.withAlphaComponent(0.40)
+                : theme.secondaryText.withAlphaComponent(0.48)
             label.attributedText = buildStaticLyricAttributedText(text: lineText, color: plainColor)
-            label.layer.shadowOpacity = 0.0
+            animateLyricShadowOpacity(label.layer, to: 0.0, duration: transitionDuration, animated: animateShadow)
         }
     }
 
@@ -2167,15 +2185,18 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         let contentW = max(60.0, containerW - 4.0)
         let centerX = containerW / 2.0
-        let sideScale: CGFloat = 0.79
+        let sideScale: CGFloat = 0.76
+        let edgeScale: CGFloat = 0.62
         let centerScale: CGFloat = 1.0
-        let slotGap: CGFloat = 8.0
+        let sideAlpha: CGFloat = 0.72
+        let slotGap: CGFloat = 10.0
+        let transitionDuration: TimeInterval = 0.56
 
         let lines = lyrics.lines
         let smoothElapsed = currentSmoothLyricsElapsed()
         let instState = instrumentalSpinnerState(at: smoothElapsed)
         let shouldAnimate = (animatedDirection != 0) && (barMode == .lyrics) && !nowPlayingContainer.isHidden
-        let slideDelta: CGFloat = animatedDirection > 0 ? 26.0 : -26.0
+        let dirSign: CGFloat = animatedDirection > 0 ? 1.0 : -1.0
 
         struct TargetSlot {
             let index: Int
@@ -2183,6 +2204,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             let forceDimmed: Bool
             let centerY: CGFloat
             let scale: CGFloat
+            let alpha: CGFloat
             let height: CGFloat
         }
 
@@ -2199,7 +2221,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             instrumentalSpinnerView.isHidden = false
 
             if spinnerJustAppeared && shouldAnimate {
-                instrumentalSpinnerView.transform = CGAffineTransform(translationX: 0, y: 18.0).scaledBy(x: 0.72, y: 0.72)
+                instrumentalSpinnerView.transform = CGAffineTransform(translationX: 0, y: 22.0).scaledBy(x: 0.72, y: 0.72)
                 instrumentalSpinnerView.alpha = 0.0
                 animateSpinnerIn = true
             } else {
@@ -2211,12 +2233,12 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             if let prevIdx = instState.prevIndex, lines.indices.contains(prevIdx) {
                 let h = measureLyricLabelHeight(text: lines[prevIdx].text, width: contentW)
                 let y = (spinnerCenterY - 12.0 - slotGap) - (h * sideScale) / 2.0
-                targets.append(TargetSlot(index: prevIdx, isCenter: false, forceDimmed: true, centerY: y, scale: sideScale, height: h))
+                targets.append(TargetSlot(index: prevIdx, isCenter: false, forceDimmed: true, centerY: y, scale: sideScale, alpha: sideAlpha, height: h))
             }
             if let nextIdx = instState.nextIndex, lines.indices.contains(nextIdx) {
                 let h = measureLyricLabelHeight(text: lines[nextIdx].text, width: contentW)
                 let y = (spinnerCenterY + 12.0 + slotGap) + (h * sideScale) / 2.0
-                targets.append(TargetSlot(index: nextIdx, isCenter: false, forceDimmed: true, centerY: y, scale: sideScale, height: h))
+                targets.append(TargetSlot(index: nextIdx, isCenter: false, forceDimmed: true, centerY: y, scale: sideScale, alpha: sideAlpha, height: h))
             }
         } else {
             let justExitedSpinner = wasShowingInstrumentalSpinner
@@ -2239,20 +2261,20 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             let centerIdx = min(max(0, displayLyricCenterIndex), lines.count - 1)
             let midH = measureLyricLabelHeight(text: lines[centerIdx].text, width: contentW)
             let midCenterY = containerH / 2.0
-            targets.append(TargetSlot(index: centerIdx, isCenter: true, forceDimmed: false, centerY: midCenterY, scale: centerScale, height: midH))
+            targets.append(TargetSlot(index: centerIdx, isCenter: true, forceDimmed: false, centerY: midCenterY, scale: centerScale, alpha: 1.0, height: midH))
 
             let prevIdx = centerIdx - 1
             if prevIdx >= 0 && lines.indices.contains(prevIdx) {
                 let prevH = measureLyricLabelHeight(text: lines[prevIdx].text, width: contentW)
                 let prevCenterY = (midCenterY - (midH * centerScale) / 2.0) - slotGap - (prevH * sideScale) / 2.0
-                targets.append(TargetSlot(index: prevIdx, isCenter: false, forceDimmed: false, centerY: prevCenterY, scale: sideScale, height: prevH))
+                targets.append(TargetSlot(index: prevIdx, isCenter: false, forceDimmed: false, centerY: prevCenterY, scale: sideScale, alpha: sideAlpha, height: prevH))
             }
 
             let nextIdx = centerIdx + 1
             if nextIdx < lines.count {
                 let nextH = measureLyricLabelHeight(text: lines[nextIdx].text, width: contentW)
                 let nextCenterY = (midCenterY + (midH * centerScale) / 2.0) + slotGap + (nextH * sideScale) / 2.0
-                targets.append(TargetSlot(index: nextIdx, isCenter: false, forceDimmed: false, centerY: nextCenterY, scale: sideScale, height: nextH))
+                targets.append(TargetSlot(index: nextIdx, isCenter: false, forceDimmed: false, centerY: nextCenterY, scale: sideScale, alpha: sideAlpha, height: nextH))
             }
         }
 
@@ -2263,13 +2285,15 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         for idx in leavingIndices {
             guard let oldLabel = lyricLabelsByIndex.removeValue(forKey: idx) else { continue }
             if shouldAnimate {
+                let exitTravel = max(40.0, oldLabel.bounds.height * 0.85 + 18.0) * dirSign
+                animateLyricShadowOpacity(oldLabel.layer, to: 0.0, duration: transitionDuration * 0.75, animated: true)
                 UIView.animate(
-                    withDuration: 0.30,
+                    withDuration: transitionDuration * 0.90,
                     delay: 0,
-                    options: [.curveEaseOut, .beginFromCurrentState],
+                    options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction],
                     animations: {
-                        oldLabel.center = CGPoint(x: oldLabel.center.x, y: oldLabel.center.y - slideDelta)
-                        oldLabel.transform = CGAffineTransform(scaleX: 0.72, y: 0.72)
+                        oldLabel.center = CGPoint(x: oldLabel.center.x, y: oldLabel.center.y - exitTravel)
+                        oldLabel.transform = CGAffineTransform(scaleX: edgeScale, y: edgeScale)
                         oldLabel.alpha = 0.0
                     },
                     completion: { _ in
@@ -2287,13 +2311,18 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         for slot in targets {
             if let existing = lyricLabelsByIndex[slot.index] {
-                existing.bounds = CGRect(x: 0, y: 0, width: contentW, height: slot.height)
+                let targetSize = CGSize(width: contentW, height: slot.height)
+                if existing.bounds.size != targetSize {
+                    existing.bounds = CGRect(origin: .zero, size: targetSize)
+                }
                 applyStyleToLyricLabel(
                     existing,
                     lineIndex: slot.index,
                     isCenterSlot: slot.isCenter,
                     forceDimmed: slot.forceDimmed,
-                    smoothElapsed: smoothElapsed
+                    smoothElapsed: smoothElapsed,
+                    animateShadow: shouldAnimate,
+                    transitionDuration: transitionDuration
                 )
                 existingUpdates.append((existing, slot))
             } else {
@@ -2304,47 +2333,48 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                     lineIndex: slot.index,
                     isCenterSlot: slot.isCenter,
                     forceDimmed: slot.forceDimmed,
-                    smoothElapsed: smoothElapsed
+                    smoothElapsed: smoothElapsed,
+                    animateShadow: false,
+                    transitionDuration: transitionDuration
                 )
                 lyricsSlotsContainer.addSubview(created)
                 lyricLabelsByIndex[slot.index] = created
 
                 if shouldAnimate {
-                    created.center = CGPoint(x: centerX, y: slot.centerY + slideDelta)
-                    created.transform = CGAffineTransform(scaleX: 0.74, y: 0.74)
+                    let enterTravel = max(40.0, slot.height * 0.85 + 18.0) * dirSign
+                    created.center = CGPoint(x: centerX, y: slot.centerY + enterTravel)
+                    created.transform = CGAffineTransform(scaleX: edgeScale, y: edgeScale)
                     created.alpha = 0.0
                     newlyCreated.append((created, slot))
                 } else {
                     created.center = CGPoint(x: centerX, y: slot.centerY)
                     created.transform = CGAffineTransform(scaleX: slot.scale, y: slot.scale)
-                    created.alpha = 1.0
+                    created.alpha = slot.alpha
                 }
             }
         }
 
         if shouldAnimate {
             UIView.animate(
-                withDuration: 0.38,
+                withDuration: transitionDuration,
                 delay: 0,
-                usingSpringWithDamping: 0.90,
-                initialSpringVelocity: 0.16,
-                options: [.curveEaseOut, .beginFromCurrentState],
+                options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction],
                 animations: {
                     for (lbl, slot) in existingUpdates {
                         lbl.center = CGPoint(x: centerX, y: slot.centerY)
                         lbl.transform = CGAffineTransform(scaleX: slot.scale, y: slot.scale)
-                        lbl.alpha = 1.0
+                        lbl.alpha = slot.alpha
                     }
                     for (lbl, slot) in newlyCreated {
                         lbl.center = CGPoint(x: centerX, y: slot.centerY)
                         lbl.transform = CGAffineTransform(scaleX: slot.scale, y: slot.scale)
-                        lbl.alpha = 1.0
+                        lbl.alpha = slot.alpha
                     }
                     if animateSpinnerIn {
                         self.instrumentalSpinnerView.transform = .identity
                         self.instrumentalSpinnerView.alpha = 1.0
                     } else if animateSpinnerOut {
-                        self.instrumentalSpinnerView.transform = CGAffineTransform(translationX: 0, y: -18.0).scaledBy(x: 0.68, y: 0.68)
+                        self.instrumentalSpinnerView.transform = CGAffineTransform(translationX: 0, y: -22.0).scaledBy(x: 0.68, y: 0.68)
                         self.instrumentalSpinnerView.alpha = 0.0
                     }
                 },
@@ -2361,7 +2391,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             for (lbl, slot) in existingUpdates {
                 lbl.center = CGPoint(x: centerX, y: slot.centerY)
                 lbl.transform = CGAffineTransform(scaleX: slot.scale, y: slot.scale)
-                lbl.alpha = 1.0
+                lbl.alpha = slot.alpha
             }
         }
     }
