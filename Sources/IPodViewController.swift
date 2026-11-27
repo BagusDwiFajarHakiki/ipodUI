@@ -102,7 +102,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         screenView.onSeekRatioChanged = { [weak self] ratio, isFinished in
             guard let self = self else { return }
             switch self.nowPlayingBarMode {
-            case .duration:
+            case .duration, .lyrics:
                 self.seekToRatio(ratio, isFinished: isFinished)
             case .volume:
                 self.setSystemVolume(Float(ratio))
@@ -163,6 +163,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         IPodMusicLibrary.shared.requestAccessAndLoad { [weak self] in
             self?.renderTopMenu(restoreIndex: 0)
         }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        UIApplication.shared.isIdleTimerDisabled = false
     }
 
     override func viewDidLayoutSubviews() {
@@ -694,9 +699,17 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
+    private func updateIdleTimerForLyrics() {
+        let keepAwake = isNowPlayingActive && (nowPlayingBarMode == .lyrics)
+        if UIApplication.shared.isIdleTimerDisabled != keepAwake {
+            UIApplication.shared.isIdleTimerDisabled = keepAwake
+        }
+    }
+
     private func renderTopMenu(restoreIndex: Int, animateFromNowPlaying: Bool = false) {
         guard let top = menuStack.last else { return }
         isNowPlayingActive = false
+        updateIdleTimerForLyrics()
 
         if case .allSongs = top.node {
             let songs = IPodMusicLibrary.shared.allTracks
@@ -825,6 +838,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 seekBy(seconds: Double(steps) * 5.0)
             case .volume:
                 setSystemVolume(currentSystemVolume() + Float(steps) * 0.06)
+            case .lyrics:
+                screenView.scrollLyrics(by: steps)
             case .sleepTimer:
                 adjustSleepTimer(byMinutes: steps)
             }
@@ -870,10 +885,16 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             case .duration:
                 nowPlayingBarMode = .volume
             case .volume:
+                nowPlayingBarMode = .lyrics
+            case .lyrics:
                 nowPlayingBarMode = .sleepTimer
             case .sleepTimer:
                 nowPlayingBarMode = .duration
             }
+            if nowPlayingBarMode == .lyrics, currentQueue.indices.contains(currentTrackIndex) {
+                prefetchLyricsIfNeeded(for: currentQueue[currentTrackIndex])
+            }
+            updateIdleTimerForLyrics()
             screenView.setNowPlayingBarMode(
                 nowPlayingBarMode,
                 volume: currentSystemVolume(),
@@ -1089,6 +1110,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 isSleepActive: isSleepTimerActive
             )
         }
+        updateIdleTimerForLyrics()
         let track = currentQueue[currentTrackIndex]
         screenView.showNowPlaying(
             track: track,
@@ -1138,6 +1160,9 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         playingTrackArtwork = track.artworkImage
         screenView.updatePlayState(isPlaying: true)
         updateAmbientGlow(from: track.artworkImage)
+        if !isWatchdogRetry {
+            prefetchLyricsIfNeeded(for: track)
+        }
 
         if isNowPlayingActive && !isWatchdogRetry {
             screenView.showNowPlaying(
@@ -1177,6 +1202,9 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                         self.currentQueue[self.currentTrackIndex] = updatedTrack
                         if self.isNowPlayingActive {
                             self.screenView.updateProgress(elapsed: resumeFromSeconds, duration: realDur)
+                        }
+                        if IPodLyricsService.shared.cachedLyrics(for: updatedTrack.id) == nil {
+                            self.prefetchLyricsIfNeeded(for: updatedTrack)
                         }
                     }
                     self.currentStreamFallbacks = stream.fallbackCandidates
@@ -1428,6 +1456,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 if self.isPlaying {
                     self.togglePlayPause()
                 }
+                UIApplication.shared.isIdleTimerDisabled = false
                 self.sleepVolumeScale = 1.0
                 self.player?.volume = 1.0
                 self.screenView.showStatusBanner("Waktu tidur selesai • Musik dijeda")
@@ -1532,9 +1561,25 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         playTrack(at: currentTrackIndex, transitionDirection: -1)
     }
 
+    private func prefetchLyricsIfNeeded(for track: IPodTrack) {
+        if let cached = IPodLyricsService.shared.cachedLyrics(for: track.id) {
+            let curElapsed = player.map { CMTimeGetSeconds($0.currentTime()) } ?? 0
+            screenView.applyLyrics(cached, for: track.id, currentElapsed: curElapsed.isFinite ? curElapsed : 0)
+            return
+        }
+        screenView.setLyricsLoading(for: track.id)
+        IPodLyricsService.shared.fetchLyrics(for: track) { [weak self] lyrics in
+            guard let self = self,
+                  self.currentQueue.indices.contains(self.currentTrackIndex),
+                  self.currentQueue[self.currentTrackIndex].id == track.id else { return }
+            let curElapsed = self.player.map { CMTimeGetSeconds($0.currentTime()) } ?? 0
+            self.screenView.applyLyrics(lyrics, for: track.id, currentElapsed: curElapsed.isFinite ? curElapsed : 0)
+        }
+    }
+
     private func startProgressTimer() {
         playbackTimer?.invalidate()
-        playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self = self, let player = self.player, let item = player.currentItem,
                   self.currentQueue.indices.contains(self.currentTrackIndex) else { return }
             let track = self.currentQueue[self.currentTrackIndex]
@@ -1552,12 +1597,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                     }
                     if elapsed <= 5.0 {
                         self.startupStuckTicks += 1
-                        if self.startupStuckTicks >= 16 {
+                        if self.startupStuckTicks >= 32 {
                             self.triggerWatchdogRecovery(for: track, item: item)
                         }
                     } else if abs(elapsed - self.lastObservedElapsed) < 0.25 {
                         self.stuckTicks += 1
-                        if self.stuckTicks >= 10 {
+                        if self.stuckTicks >= 20 {
                             self.triggerWatchdogRecovery(for: track, item: item)
                         }
                     } else {
@@ -1571,7 +1616,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 }
             } else if self.isPlaying && player.rate == 0 {
                 self.startupStuckTicks += 1
-                if self.startupStuckTicks >= 12 {
+                if self.startupStuckTicks >= 24 {
                     self.triggerWatchdogRecovery(for: track, item: item)
                 }
             }

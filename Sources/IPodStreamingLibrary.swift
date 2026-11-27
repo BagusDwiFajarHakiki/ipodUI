@@ -320,6 +320,273 @@ final class IPodStreamingLibrary {
         resolvedStreamCache.removeValue(forKey: track.id)
     }
 
+    func videoId(for track: IPodTrack) -> String? {
+        if let mapped = videoIdByTrackId[track.id], !mapped.isEmpty {
+            return mapped
+        }
+        if let url = track.assetURL,
+           let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let v = comps.queryItems?.first(where: { $0.name == "v" })?.value,
+           !v.isEmpty {
+            return v
+        }
+        return nil
+    }
+
+    func fetchInnerTubeLyrics(forVideoId videoId: String, completion: @escaping ([(time: TimeInterval?, text: String)]?, Bool) -> Void) {
+        guard !videoId.isEmpty,
+              let nextURL = URL(string: "https://music.youtube.com/youtubei/v1/next?prettyPrint=false") else {
+            completion(nil, false)
+            return
+        }
+
+        let client = InnerTubeClient.webRemix
+        var clientCtx = client.clientContext(visitorData: visitorData)
+        clientCtx["originalUrl"] = "https://music.youtube.com/watch?v=\(videoId)"
+        let nextBody: [String: Any] = [
+            "context": ["client": clientCtx],
+            "videoId": videoId
+        ]
+
+        var nextReq = URLRequest(url: nextURL)
+        nextReq.httpMethod = "POST"
+        nextReq.timeoutInterval = 8.0
+        nextReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        nextReq.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
+        nextReq.setValue(client.clientId, forHTTPHeaderField: "X-YouTube-Client-Name")
+        nextReq.setValue(client.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        nextReq.setValue("https://music.youtube.com", forHTTPHeaderField: "Origin")
+        nextReq.setValue("https://music.youtube.com/", forHTTPHeaderField: "Referer")
+        nextReq.httpBody = try? JSONSerialization.data(withJSONObject: nextBody)
+
+        URLSession.shared.dataTask(with: nextReq) { [weak self] data, response, error in
+            guard let self = self else {
+                completion(nil, false)
+                return
+            }
+
+            if error == nil,
+               let http = response as? HTTPURLResponse,
+               http.statusCode == 200,
+               let data = data,
+               let json = try? JSONSerialization.jsonObject(with: data),
+               let lyricsBrowseId = self.findLyricsBrowseId(in: json) {
+                self.fetchYouTubeMusicBrowseLyrics(browseId: lyricsBrowseId, client: client) { lines, isSynced in
+                    if let lines = lines, !lines.isEmpty {
+                        completion(lines, isSynced)
+                    } else {
+                        self.fetchYouTubeCaptionLyrics(videoId: videoId, completion: completion)
+                    }
+                }
+                return
+            }
+
+            self.fetchYouTubeCaptionLyrics(videoId: videoId, completion: completion)
+        }.resume()
+    }
+
+    private func findLyricsBrowseId(in root: Any) -> String? {
+        if let dict = root as? [String: Any] {
+            if let browseId = dict["browseId"] as? String, browseId.hasPrefix("MPLYt_") {
+                return browseId
+            }
+            for (_, val) in dict {
+                if let found = findLyricsBrowseId(in: val) {
+                    return found
+                }
+            }
+        } else if let arr = root as? [Any] {
+            for item in arr {
+                if let found = findLyricsBrowseId(in: item) {
+                    return found
+                }
+            }
+        }
+        return nil
+    }
+
+    private func fetchYouTubeMusicBrowseLyrics(
+        browseId: String,
+        client: InnerTubeClient,
+        completion: @escaping ([(time: TimeInterval?, text: String)]?, Bool) -> Void
+    ) {
+        guard let browseURL = URL(string: "https://music.youtube.com/youtubei/v1/browse?prettyPrint=false") else {
+            completion(nil, false)
+            return
+        }
+
+        let body: [String: Any] = [
+            "context": ["client": client.clientContext(visitorData: visitorData)],
+            "browseId": browseId
+        ]
+        var req = URLRequest(url: browseURL)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 8.0
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue(client.clientId, forHTTPHeaderField: "X-YouTube-Client-Name")
+        req.setValue(client.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        req.setValue("https://music.youtube.com", forHTTPHeaderField: "Origin")
+        req.setValue("https://music.youtube.com/", forHTTPHeaderField: "Referer")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: req) { [weak self] data, response, error in
+            guard let self = self,
+                  error == nil,
+                  let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) else {
+                completion(nil, false)
+                return
+            }
+
+            if let timed = self.extractTimedLyrics(from: json), !timed.isEmpty {
+                completion(timed, true)
+                return
+            }
+            if let plain = self.extractPlainDescriptionLyrics(from: json), !plain.isEmpty {
+                completion(plain, false)
+                return
+            }
+            completion(nil, false)
+        }.resume()
+    }
+
+    private func extractTimedLyrics(from root: Any) -> [(time: TimeInterval?, text: String)]? {
+        if let dict = root as? [String: Any] {
+            if let model = dict["timedLyricsModel"] as? [String: Any],
+               let lyricsData = model["lyricsData"] as? [[String: Any]] {
+                var parsed: [(time: TimeInterval?, text: String)] = []
+                for entry in lyricsData {
+                    guard let line = (entry["lyricLine"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !line.isEmpty else { continue }
+                    let cueRange = entry["cueRange"] as? [String: Any]
+                    let startMsStr = cueRange?["startTimeMilliseconds"] as? String
+                    let startMsNum = cueRange?["startTimeMilliseconds"] as? NSNumber
+                    let startMs = startMsStr.flatMap(Double.init) ?? startMsNum?.doubleValue
+                    let timeSec = startMs.map { $0 / 1000.0 }
+                    parsed.append((time: timeSec, text: line))
+                }
+                if !parsed.isEmpty { return parsed }
+            }
+            for (_, val) in dict {
+                if let found = extractTimedLyrics(from: val) { return found }
+            }
+        } else if let arr = root as? [Any] {
+            for item in arr {
+                if let found = extractTimedLyrics(from: item) { return found }
+            }
+        }
+        return nil
+    }
+
+    private func extractPlainDescriptionLyrics(from root: Any) -> [(time: TimeInterval?, text: String)]? {
+        if let dict = root as? [String: Any] {
+            if let shelf = dict["musicDescriptionShelfRenderer"] as? [String: Any],
+               let descText = extractText(from: shelf["description"]) {
+                let lines = descText.components(separatedBy: .newlines)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .map { (time: nil as TimeInterval?, text: $0) }
+                if !lines.isEmpty { return lines }
+            }
+            for (_, val) in dict {
+                if let found = extractPlainDescriptionLyrics(from: val) { return found }
+            }
+        } else if let arr = root as? [Any] {
+            for item in arr {
+                if let found = extractPlainDescriptionLyrics(from: item) { return found }
+            }
+        }
+        return nil
+    }
+
+    private func fetchYouTubeCaptionLyrics(
+        videoId: String,
+        completion: @escaping ([(time: TimeInterval?, text: String)]?, Bool) -> Void
+    ) {
+        guard let playerURL = URL(string: "https://www.youtube.com/youtubei/v1/player?prettyPrint=false") else {
+            completion(nil, false)
+            return
+        }
+        let client = InnerTubeClient.web
+        let body: [String: Any] = [
+            "context": ["client": client.clientContext(visitorData: visitorData)],
+            "videoId": videoId,
+            "contentCheckOk": true,
+            "racyCheckOk": true
+        ]
+        var req = URLRequest(url: playerURL)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 8.0
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue(client.clientId, forHTTPHeaderField: "X-YouTube-Client-Name")
+        req.setValue(client.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        URLSession.shared.dataTask(with: req) { data, response, error in
+            guard error == nil,
+                  let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let captions = json["captions"] as? [String: Any],
+                  let renderer = captions["playerCaptionsTracklistRenderer"] as? [String: Any],
+                  let tracks = renderer["captionTracks"] as? [[String: Any]],
+                  !tracks.isEmpty else {
+                completion(nil, false)
+                return
+            }
+
+            // Prefer human-authored lyrics/captions over auto-generated ASR
+            let preferred = tracks.first(where: { ($0["kind"] as? String) != "asr" && (($0["languageCode"] as? String) == "id" || ($0["languageCode"] as? String) == "en") })
+                ?? tracks.first(where: { ($0["kind"] as? String) != "asr" })
+                ?? tracks.first
+
+            guard var baseUrlStr = preferred?["baseUrl"] as? String, !baseUrlStr.isEmpty else {
+                completion(nil, false)
+                return
+            }
+            if !baseUrlStr.contains("fmt=json3") {
+                baseUrlStr += baseUrlStr.contains("?") ? "&fmt=json3" : "?fmt=json3"
+            }
+            guard let captionURL = URL(string: baseUrlStr) else {
+                completion(nil, false)
+                return
+            }
+
+            var capReq = URLRequest(url: captionURL)
+            capReq.timeoutInterval = 8.0
+            capReq.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
+            URLSession.shared.dataTask(with: capReq) { cData, cResp, cErr in
+                guard cErr == nil,
+                      let cHttp = cResp as? HTTPURLResponse,
+                      cHttp.statusCode == 200,
+                      let cData = cData,
+                      let cJson = try? JSONSerialization.jsonObject(with: cData) as? [String: Any],
+                      let events = cJson["events"] as? [[String: Any]] else {
+                    completion(nil, false)
+                    return
+                }
+
+                var result: [(time: TimeInterval?, text: String)] = []
+                for ev in events {
+                    guard let startMs = ev["tStartMs"] as? Double,
+                          let segs = ev["segs"] as? [[String: Any]] else { continue }
+                    let rawText = segs.compactMap { $0["utf8"] as? String }
+                        .joined()
+                        .replacingOccurrences(of: "\n", with: " ")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !rawText.isEmpty, rawText != "[Music]", rawText != "♪" else { continue }
+                    result.append((time: startMs / 1000.0, text: rawText))
+                }
+                completion(result.isEmpty ? nil : result, !result.isEmpty)
+            }.resume()
+        }.resume()
+    }
+
     func tracksPage(pageIndex: Int) -> (tracks: [IPodTrack], currentPage: Int, totalPages: Int, hasNextPage: Bool) {
         let total = allStreamingTracks.count
         guard total > 0 else {
