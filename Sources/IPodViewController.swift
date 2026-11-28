@@ -38,8 +38,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var playingTrackArtwork: UIImage?
     private var lastGlowSize: CGSize = .zero
     private var lastMirrorSize: CGSize = .zero
-    private let hiddenVolumeView = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
-    private var volumeObserver: NSKeyValueObservation?
 
     private var player: AVPlayer?
     private var playbackTimer: Timer?
@@ -51,6 +49,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var currentTrackIndex: Int = 0
     private var isPlaying = false
     private var isShuffleActive = false
+    private var isFetchingMoreRecommendations = false
+    private var pendingPlayNextAfterRecommendations = false
 
     // Stream Watchdog Tweak state
     private var lastObservedElapsed: TimeInterval = -1
@@ -104,12 +104,14 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             switch self.nowPlayingBarMode {
             case .duration, .lyrics:
                 self.seekToRatio(ratio, isFinished: isFinished)
-            case .volume:
-                self.setSystemVolume(Float(ratio))
             case .sleepTimer:
                 let mins = Int(round(min(max(ratio, 0.0), 1.0) * 60.0))
                 self.setSleepTimerMinutes(mins, startActivationCountdown: isFinished)
             }
+        }
+
+        screenView.onSleepTimerMinutesChanged = { [weak self] mins, isFinished in
+            self?.setSleepTimerMinutes(mins, startActivationCountdown: isFinished && mins > 0)
         }
 
         screenView.onActiveCoverImageChanged = { [weak self] image in
@@ -186,7 +188,14 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         renderTopMenu(restoreIndex: 0)
 
         IPodMusicLibrary.shared.requestAccessAndLoad { [weak self] in
-            self?.renderTopMenu(restoreIndex: 0)
+            guard let self = self, !self.isNowPlayingActive, let top = self.menuStack.last else { return }
+            switch top.node {
+            case .allSongs, .playlists, .playlistTracks:
+                let preservedIdx = self.screenView.selectedIndex
+                self.renderTopMenu(restoreIndex: preservedIdx)
+            default:
+                break
+            }
         }
     }
 
@@ -245,10 +254,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         clickWheel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(clickWheel)
-
-        hiddenVolumeView.alpha = 0.01
-        hiddenVolumeView.isUserInteractionEnabled = false
-        view.addSubview(hiddenVolumeView)
 
         NSLayoutConstraint.activate([
             screenView.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
@@ -471,28 +476,9 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             try session.setCategory(.playback, mode: .default)
             try session.setActive(true)
             UIApplication.shared.beginReceivingRemoteControlEvents()
-            volumeObserver = session.observe(\.outputVolume, options: [.new]) { [weak self] _, change in
-                DispatchQueue.main.async {
-                    guard let self = self, self.isNowPlayingActive, self.nowPlayingBarMode == .volume,
-                          let vol = change.newValue else { return }
-                    self.screenView.updateVolumeDisplay(vol)
-                }
-            }
         } catch {
             print("Audio session error: \(error)")
         }
-    }
-
-    private func currentSystemVolume() -> Float {
-        return AVAudioSession.sharedInstance().outputVolume
-    }
-
-    private func setSystemVolume(_ newValue: Float) {
-        let clamped = min(max(newValue, 0.0), 1.0)
-        if let slider = hiddenVolumeView.subviews.compactMap({ $0 as? UISlider }).first {
-            slider.value = clamped
-        }
-        screenView.updateVolumeDisplay(clamped)
     }
 
     private var isLightAppIconActive: Bool {
@@ -611,12 +597,30 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     private func appendRecommendations(for seedTrack: IPodTrack, replaceUpcoming: Bool, playNextOnArrival: Bool = false) {
+        if !replaceUpcoming {
+            if isFetchingMoreRecommendations {
+                if playNextOnArrival {
+                    pendingPlayNextAfterRecommendations = true
+                }
+                return
+            }
+            isFetchingMoreRecommendations = true
+            pendingPlayNextAfterRecommendations = playNextOnArrival
+        }
+
         let seedId = seedTrack.id
         let existingVideoIds = Set(currentQueue.compactMap { IPodStreamingLibrary.shared.videoId(for: $0) })
         let excludeIds: Set<String> = replaceUpcoming ? [] : existingVideoIds
+        let fetchLimit = replaceUpcoming ? max(1, 25 - currentQueue.count) : 25
 
-        IPodStreamingLibrary.shared.fetchRecommendations(for: seedTrack, excludeVideoIds: excludeIds, limit: 25) { [weak self] recs in
-            guard let self = self, self.isShuffleActive else { return }
+        IPodStreamingLibrary.shared.fetchRecommendations(for: seedTrack, excludeVideoIds: excludeIds, limit: fetchLimit) { [weak self] recs in
+            guard let self = self else { return }
+            let shouldAdvanceOnArrival = playNextOnArrival || (!replaceUpcoming && self.pendingPlayNextAfterRecommendations)
+            if !replaceUpcoming {
+                self.isFetchingMoreRecommendations = false
+                self.pendingPlayNextAfterRecommendations = false
+            }
+            guard self.isShuffleActive else { return }
             guard self.currentQueue.indices.contains(self.currentTrackIndex),
                   self.currentQueue[self.currentTrackIndex].id == seedId else { return }
 
@@ -628,7 +632,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 ).dropFirst().filter {
                     guard !replaceUpcoming, let vid = IPodStreamingLibrary.shared.videoId(for: $0) else { return true }
                     return !excludeIds.contains(vid)
-                }.prefix(10)
+                }.prefix(fetchLimit)
                 chosenRecs = Array(fallbackRelated)
             }
             guard !chosenRecs.isEmpty else { return }
@@ -646,7 +650,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             if self.isNowPlayingActive {
                 self.screenView.updateNowPlayingTrackIndex(self.currentTrackIndex, total: self.currentQueue.count)
             }
-            if playNextOnArrival && self.currentQueue.indices.contains(self.currentTrackIndex + 1) {
+            if shouldAdvanceOnArrival && self.currentQueue.indices.contains(self.currentTrackIndex + 1) {
                 self.currentTrackIndex += 1
                 self.playTrack(at: self.currentTrackIndex, transitionDirection: 1)
             }
@@ -859,8 +863,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             switch nowPlayingBarMode {
             case .duration:
                 seekBy(seconds: Double(steps) * 5.0)
-            case .volume:
-                setSystemVolume(currentSystemVolume() + Float(steps) * 0.06)
             case .lyrics:
                 screenView.scrollLyrics(by: steps)
             case .sleepTimer:
@@ -917,8 +919,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             case .duration:
                 nowPlayingBarMode = .lyrics
             case .lyrics:
-                nowPlayingBarMode = .volume
-            case .volume:
                 nowPlayingBarMode = .sleepTimer
             case .sleepTimer:
                 nowPlayingBarMode = .duration
@@ -929,7 +929,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             updateIdleTimerForLyrics()
             screenView.setNowPlayingBarMode(
                 nowPlayingBarMode,
-                volume: currentSystemVolume(),
                 sleepSetMinutes: sleepSetMinutes,
                 sleepElapsedSeconds: sleepElapsedSeconds,
                 isSleepActive: isSleepTimerActive
@@ -1144,7 +1143,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             nowPlayingBarMode = .duration
             screenView.setNowPlayingBarMode(
                 .duration,
-                volume: currentSystemVolume(),
                 sleepSetMinutes: sleepSetMinutes,
                 sleepElapsedSeconds: sleepElapsedSeconds,
                 isSleepActive: isSleepTimerActive
@@ -1703,18 +1701,17 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     private func playNextTrack() {
         guard !currentQueue.isEmpty else { return }
-        if currentQueue.count == 1,
-           currentQueue.indices.contains(currentTrackIndex),
+        if isShuffleActive,
+           currentTrackIndex == currentQueue.count - 1,
            currentQueue[currentTrackIndex].id.hasPrefix("innertube_") {
             let active = currentQueue[currentTrackIndex]
-            isShuffleActive = true
-            screenView.showStatusBanner("Mencari lagu sejenis...")
-            appendRecommendations(for: active, replaceUpcoming: true, playNextOnArrival: true)
+            screenView.showStatusBanner("Mencari lagu berikutnya...")
+            appendRecommendations(for: active, replaceUpcoming: currentQueue.count == 1, playNextOnArrival: true)
             return
         }
         currentTrackIndex = (currentTrackIndex + 1) % currentQueue.count
         playTrack(at: currentTrackIndex, transitionDirection: 1)
-        if isShuffleActive && currentTrackIndex >= max(0, currentQueue.count - 3) {
+        if isShuffleActive && currentTrackIndex == currentQueue.count - 1 {
             let active = currentQueue[currentTrackIndex]
             if active.id.hasPrefix("innertube_") {
                 appendRecommendations(for: active, replaceUpcoming: false)
