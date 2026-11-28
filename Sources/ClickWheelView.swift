@@ -548,6 +548,7 @@ class ClickWheelView: UIView {
         switch gesture.state {
         case .began:
             didTriggerCenterLongPress = true
+            guard !isTimerEditingMode else { return }
             let haptic = UIImpactFeedbackGenerator(style: .medium)
             haptic.impactOccurred()
             playClickSound()

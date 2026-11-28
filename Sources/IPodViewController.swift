@@ -823,7 +823,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         if isNowPlayingActive {
             switch nowPlayingBarMode {
             case .duration:
-                seekBy(seconds: Double(steps) * 5.0)
+                seekBy(seconds: Double(steps))
             case .lyrics:
                 screenView.scrollLyrics(by: steps)
             }
@@ -889,10 +889,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     func clickWheelDidLongPressSelect() {
-        if isWheelTimerMode {
-            exitWheelTimerMode()
-            return
-        }
+        guard !isWheelTimerMode else { return }
+        pendingWheelSeekTarget = nil
         enterWheelTimerMode()
     }
 
