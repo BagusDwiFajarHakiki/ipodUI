@@ -177,27 +177,29 @@ class IPodMenuCell: UITableViewCell {
             arrowLabel.textColor = .white
             if let isOn = row.isPositiveToggle {
                 badgeContainer.backgroundColor = isOn
-                    ? UIColor(red: 0.20, green: 0.78, blue: 0.42, alpha: 1.0)
-                    : UIColor(white: 0.0, alpha: 0.30)
-                badgeLabel.textColor = .white
+                    ? UIColor(white: 1.0, alpha: 0.94)
+                    : UIColor(white: 0.0, alpha: 0.28)
+                badgeLabel.textColor = isOn ? theme.highlightBottom : UIColor(white: 1.0, alpha: 0.85)
             } else {
-                badgeContainer.backgroundColor = UIColor(white: 1.0, alpha: 0.22)
-                badgeLabel.textColor = .white
+                badgeContainer.backgroundColor = UIColor(white: 1.0, alpha: 0.94)
+                badgeLabel.textColor = theme.highlightBottom
             }
         } else {
             highlightGradient.isHidden = true
             titleLabel.textColor = theme.primaryText
             arrowLabel.textColor = theme.secondaryText
             if let isOn = row.isPositiveToggle {
-                badgeContainer.backgroundColor = isOn
-                    ? UIColor(red: 0.18, green: 0.72, blue: 0.38, alpha: 0.90)
-                    : (theme == .darkPod ? UIColor(white: 1.0, alpha: 0.12) : UIColor(white: 0.0, alpha: 0.10))
+                let offBg: UIColor
+                switch theme {
+                case .darkPod:     offBg = UIColor(white: 1.0, alpha: 0.12)
+                case .sepiaPod:    offBg = theme.highlightTop.withAlphaComponent(0.14)
+                case .classicBlue: offBg = UIColor(white: 0.0, alpha: 0.09)
+                }
+                badgeContainer.backgroundColor = isOn ? theme.highlightTop : offBg
                 badgeLabel.textColor = isOn ? .white : theme.secondaryText
             } else {
-                badgeContainer.backgroundColor = theme == .darkPod
-                    ? UIColor(white: 1.0, alpha: 0.12)
-                    : UIColor(white: 0.0, alpha: 0.08)
-                badgeLabel.textColor = theme.primaryText
+                badgeContainer.backgroundColor = theme.highlightTop
+                badgeLabel.textColor = .white
             }
         }
 
@@ -482,12 +484,16 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private var batteryWidthConstraint: NSLayoutConstraint!
     private var clockTimer: Timer?
 
-    // Banner Status Toast
+    // Banner Status Dynamic Island
     private let statusBannerContainer = UIView()
+    private let statusBannerPillView = UIView()
     private let statusBannerAccentView = UIView()
     private let statusBannerLabel = UILabel()
+    private var statusBannerWidthConstraint: NSLayoutConstraint!
     private var statusBannerIsError = false
     private var statusBannerTimer: Timer?
+    private var statusBannerSequence: Int = 0
+    private var isStatusBannerVisible = false
 
     // Menu List View
     private let tableView = UITableView()
@@ -882,26 +888,38 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         progressKnob.translatesAutoresizingMaskIntoConstraints = false
         progressTouchArea.addSubview(progressKnob)
 
-        statusBannerContainer.layer.cornerRadius = 13
-        statusBannerContainer.layer.borderWidth = 0.8
         statusBannerContainer.layer.shadowColor = UIColor.black.cgColor
-        statusBannerContainer.layer.shadowRadius = 7
-        statusBannerContainer.layer.shadowOffset = CGSize(width: 0, height: 3)
+        statusBannerContainer.layer.shadowRadius = 6
+        statusBannerContainer.layer.shadowOffset = CGSize(width: 0, height: 2)
+        statusBannerContainer.clipsToBounds = false
         statusBannerContainer.isUserInteractionEnabled = false
         statusBannerContainer.alpha = 0.0
-        statusBannerContainer.transform = CGAffineTransform(translationX: 0, y: -10).scaledBy(x: 0.94, y: 0.94)
+        statusBannerContainer.transform = CGAffineTransform(scaleX: 0.78, y: 0.78)
         statusBannerContainer.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(statusBannerContainer)
+        headerBar.addSubview(statusBannerContainer)
+
+        statusBannerPillView.layer.cornerRadius = 11
+        statusBannerPillView.layer.borderWidth = 0.8
+        statusBannerPillView.clipsToBounds = true
+        statusBannerPillView.translatesAutoresizingMaskIntoConstraints = false
+        statusBannerContainer.addSubview(statusBannerPillView)
 
         statusBannerAccentView.layer.cornerRadius = 3.0
+        statusBannerAccentView.alpha = 0.0
         statusBannerAccentView.translatesAutoresizingMaskIntoConstraints = false
-        statusBannerContainer.addSubview(statusBannerAccentView)
+        statusBannerPillView.addSubview(statusBannerAccentView)
 
-        statusBannerLabel.font = UIFont.systemFont(ofSize: 11.0, weight: .semibold)
+        statusBannerLabel.font = UIFont.systemFont(ofSize: 10.5, weight: .semibold)
         statusBannerLabel.textAlignment = .left
-        statusBannerLabel.numberOfLines = 2
+        statusBannerLabel.numberOfLines = 1
+        statusBannerLabel.lineBreakMode = .byTruncatingTail
+        statusBannerLabel.adjustsFontSizeToFitWidth = true
+        statusBannerLabel.minimumScaleFactor = 0.82
+        statusBannerLabel.alpha = 0.0
         statusBannerLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusBannerContainer.addSubview(statusBannerLabel)
+        statusBannerPillView.addSubview(statusBannerLabel)
+
+        statusBannerWidthConstraint = statusBannerContainer.widthAnchor.constraint(equalToConstant: 22)
 
         UIDevice.current.isBatteryMonitoringEnabled = true
         let level = UIDevice.current.batteryLevel
@@ -1083,22 +1101,34 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             progressKnob.widthAnchor.constraint(equalToConstant: 10),
             progressKnob.heightAnchor.constraint(equalToConstant: 10),
 
-            statusBannerContainer.topAnchor.constraint(equalTo: headerBar.bottomAnchor, constant: 8),
-            statusBannerContainer.centerXAnchor.constraint(equalTo: centerXAnchor),
-            statusBannerContainer.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 16),
-            statusBannerContainer.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
+            statusBannerContainer.centerXAnchor.constraint(equalTo: headerBar.centerXAnchor),
+            statusBannerContainer.centerYAnchor.constraint(equalTo: headerBar.centerYAnchor),
+            statusBannerContainer.heightAnchor.constraint(equalToConstant: 22),
+            statusBannerWidthConstraint,
 
-            statusBannerAccentView.leadingAnchor.constraint(equalTo: statusBannerContainer.leadingAnchor, constant: 11),
-            statusBannerAccentView.centerYAnchor.constraint(equalTo: statusBannerContainer.centerYAnchor),
+            statusBannerPillView.topAnchor.constraint(equalTo: statusBannerContainer.topAnchor),
+            statusBannerPillView.bottomAnchor.constraint(equalTo: statusBannerContainer.bottomAnchor),
+            statusBannerPillView.leadingAnchor.constraint(equalTo: statusBannerContainer.leadingAnchor),
+            statusBannerPillView.trailingAnchor.constraint(equalTo: statusBannerContainer.trailingAnchor),
+
+            statusBannerAccentView.leadingAnchor.constraint(equalTo: statusBannerPillView.leadingAnchor, constant: 10),
+            statusBannerAccentView.centerYAnchor.constraint(equalTo: statusBannerPillView.centerYAnchor),
             statusBannerAccentView.widthAnchor.constraint(equalToConstant: 6),
             statusBannerAccentView.heightAnchor.constraint(equalToConstant: 6),
 
             statusBannerLabel.leadingAnchor.constraint(equalTo: statusBannerAccentView.trailingAnchor, constant: 7),
-            statusBannerLabel.trailingAnchor.constraint(equalTo: statusBannerContainer.trailingAnchor, constant: -12),
-            statusBannerLabel.topAnchor.constraint(equalTo: statusBannerContainer.topAnchor, constant: 6.5),
-            statusBannerLabel.bottomAnchor.constraint(equalTo: statusBannerContainer.bottomAnchor, constant: -6.5)
+            {
+                let c = statusBannerLabel.trailingAnchor.constraint(equalTo: statusBannerPillView.trailingAnchor, constant: -11)
+                c.priority = .defaultHigh
+                return c
+            }(),
+            statusBannerLabel.centerYAnchor.constraint(equalTo: statusBannerPillView.centerYAnchor)
         ])
         NSLayoutConstraint.activate(titleNormalConstraints)
+    }
+
+    private func statusBarAccessoryViews() -> [UIView] {
+        return [headerTitleLabel, clockLabel, playStateIcon, batteryView, batteryCapView]
     }
 
     private func applyStatusBannerTheme() {
@@ -1108,22 +1138,22 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         switch theme {
         case .darkPod:
-            statusBannerContainer.backgroundColor = UIColor(red: 0.13, green: 0.14, blue: 0.17, alpha: 0.94)
-            statusBannerContainer.layer.borderColor = (statusBannerIsError
+            statusBannerPillView.backgroundColor = UIColor(red: 0.13, green: 0.14, blue: 0.18, alpha: 0.96)
+            statusBannerPillView.layer.borderColor = (statusBannerIsError
                 ? errorAccent.withAlphaComponent(0.45)
                 : UIColor(white: 1.0, alpha: 0.18)).cgColor
             statusBannerContainer.layer.shadowOpacity = 0.34
         case .sepiaPod:
-            statusBannerContainer.backgroundColor = UIColor(red: 0.99, green: 0.96, blue: 0.90, alpha: 0.96)
-            statusBannerContainer.layer.borderColor = (statusBannerIsError
+            statusBannerPillView.backgroundColor = UIColor(red: 0.99, green: 0.96, blue: 0.90, alpha: 0.98)
+            statusBannerPillView.layer.borderColor = (statusBannerIsError
                 ? errorAccent.withAlphaComponent(0.38)
-                : theme.highlightTop.withAlphaComponent(0.34)).cgColor
+                : theme.highlightTop.withAlphaComponent(0.36)).cgColor
             statusBannerContainer.layer.shadowOpacity = 0.16
         case .classicBlue:
-            statusBannerContainer.backgroundColor = UIColor(red: 0.98, green: 0.99, blue: 1.0, alpha: 0.96)
-            statusBannerContainer.layer.borderColor = (statusBannerIsError
+            statusBannerPillView.backgroundColor = UIColor(red: 0.98, green: 0.99, blue: 1.0, alpha: 0.98)
+            statusBannerPillView.layer.borderColor = (statusBannerIsError
                 ? errorAccent.withAlphaComponent(0.38)
-                : theme.highlightTop.withAlphaComponent(0.30)).cgColor
+                : theme.highlightTop.withAlphaComponent(0.32)).cgColor
             statusBannerContainer.layer.shadowOpacity = 0.14
         }
     }
@@ -1131,6 +1161,9 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     func showStatusBanner(_ message: String) {
         statusBannerTimer?.invalidate()
         DispatchQueue.main.async {
+            self.statusBannerSequence += 1
+            let seq = self.statusBannerSequence
+
             let lower = message.lowercased()
             self.statusBannerIsError = lower.contains("gagal")
                 || lower.contains("tidak bisa")
@@ -1141,28 +1174,136 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
             self.statusBannerLabel.text = message
             self.applyStatusBannerTheme()
-            self.bringSubviewToFront(self.statusBannerContainer)
+            self.headerBar.bringSubviewToFront(self.statusBannerContainer)
 
-            if self.statusBannerContainer.alpha < 0.1 {
-                self.statusBannerContainer.transform = CGAffineTransform(translationX: 0, y: -10).scaledBy(x: 0.94, y: 0.94)
-            }
-            UIView.animate(
-                withDuration: 0.34,
-                delay: 0,
-                usingSpringWithDamping: 0.84,
-                initialSpringVelocity: 0.18,
-                options: [.curveEaseOut, .beginFromCurrentState]
-            ) {
-                self.statusBannerContainer.alpha = 1.0
-                self.statusBannerContainer.transform = .identity
-            }
+            let barWidth = self.headerBar.bounds.width > 40 ? self.headerBar.bounds.width : max(260, self.bounds.width)
+            let maxWidth = max(140.0, barWidth - 20.0)
+            let measuredTextW = ceil(self.statusBannerLabel.sizeThatFits(CGSize(width: maxWidth - 34.0, height: 22.0)).width)
+            let expandedWidth = min(maxWidth, max(92.0, measuredTextW + 34.0))
+            let statusItems = self.statusBarAccessoryViews()
 
-            let holdDuration: TimeInterval = self.statusBannerIsError ? 3.4 : 2.6
-            self.statusBannerTimer = Timer.scheduledTimer(withTimeInterval: holdDuration, repeats: false) { [weak self] _ in
-                UIView.animate(withDuration: 0.24, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
-                    self?.statusBannerContainer.alpha = 0.0
-                    self?.statusBannerContainer.transform = CGAffineTransform(translationX: 0, y: -6).scaledBy(x: 0.96, y: 0.96)
+            if self.isStatusBannerVisible {
+                self.statusBannerWidthConstraint.constant = expandedWidth
+                UIView.animate(
+                    withDuration: 0.36,
+                    delay: 0,
+                    usingSpringWithDamping: 0.88,
+                    initialSpringVelocity: 0.12,
+                    options: [.curveEaseInOut, .beginFromCurrentState]
+                ) {
+                    self.headerBar.layoutIfNeeded()
+                    self.statusBannerContainer.alpha = 1.0
+                    self.statusBannerContainer.transform = .identity
+                    self.statusBannerAccentView.alpha = 1.0
+                    self.statusBannerLabel.alpha = 1.0
                 }
+            } else {
+                self.isStatusBannerVisible = true
+                self.statusBannerWidthConstraint.constant = 22.0
+                self.statusBannerContainer.alpha = 0.0
+                self.statusBannerContainer.transform = CGAffineTransform(scaleX: 0.72, y: 0.72)
+                self.statusBannerAccentView.alpha = 0.0
+                self.statusBannerLabel.alpha = 0.0
+                self.headerBar.layoutIfNeeded()
+
+                // Step 1: Smoothly hide current status bar elements first (not too fast)
+                UIView.animate(
+                    withDuration: 0.28,
+                    delay: 0,
+                    options: [.curveEaseInOut, .beginFromCurrentState]
+                ) {
+                    for view in statusItems {
+                        view.alpha = 0.0
+                        view.transform = CGAffineTransform(scaleX: 0.88, y: 0.88)
+                    }
+                }
+
+                // Step 2: Dynamic Island pill appears at center and widens outward smoothly
+                UIView.animate(
+                    withDuration: 0.20,
+                    delay: 0.20,
+                    options: [.curveEaseOut, .beginFromCurrentState]
+                ) {
+                    guard self.statusBannerSequence == seq else { return }
+                    self.statusBannerContainer.alpha = 1.0
+                    self.statusBannerContainer.transform = .identity
+                }
+
+                UIView.animate(
+                    withDuration: 0.48,
+                    delay: 0.22,
+                    usingSpringWithDamping: 0.88,
+                    initialSpringVelocity: 0.10,
+                    options: [.curveEaseInOut, .beginFromCurrentState]
+                ) {
+                    guard self.statusBannerSequence == seq else { return }
+                    self.statusBannerWidthConstraint.constant = expandedWidth
+                    self.headerBar.layoutIfNeeded()
+                }
+
+                UIView.animate(
+                    withDuration: 0.24,
+                    delay: 0.36,
+                    options: [.curveEaseOut, .beginFromCurrentState]
+                ) {
+                    guard self.statusBannerSequence == seq else { return }
+                    self.statusBannerAccentView.alpha = 1.0
+                    self.statusBannerLabel.alpha = 1.0
+                }
+            }
+
+            let holdDuration: TimeInterval = self.statusBannerIsError ? 3.5 : 2.8
+            self.statusBannerTimer = Timer.scheduledTimer(withTimeInterval: holdDuration, repeats: false) { [weak self] _ in
+                guard let self = self, self.statusBannerSequence == seq else { return }
+
+                // Step 3: Fade content, shrink pill back to center, then smoothly restore status bar
+                UIView.animate(
+                    withDuration: 0.16,
+                    delay: 0,
+                    options: [.curveEaseIn, .beginFromCurrentState]
+                ) {
+                    guard self.statusBannerSequence == seq else { return }
+                    self.statusBannerAccentView.alpha = 0.0
+                    self.statusBannerLabel.alpha = 0.0
+                }
+
+                UIView.animate(
+                    withDuration: 0.42,
+                    delay: 0.04,
+                    options: [.curveEaseInOut, .beginFromCurrentState]
+                ) {
+                    guard self.statusBannerSequence == seq else { return }
+                    self.statusBannerWidthConstraint.constant = 22.0
+                    self.headerBar.layoutIfNeeded()
+                }
+
+                UIView.animate(
+                    withDuration: 0.18,
+                    delay: 0.28,
+                    options: [.curveEaseIn, .beginFromCurrentState]
+                ) {
+                    guard self.statusBannerSequence == seq else { return }
+                    self.statusBannerContainer.alpha = 0.0
+                    self.statusBannerContainer.transform = CGAffineTransform(scaleX: 0.72, y: 0.72)
+                }
+
+                UIView.animate(
+                    withDuration: 0.34,
+                    delay: 0.32,
+                    options: [.curveEaseOut, .beginFromCurrentState],
+                    animations: {
+                        guard self.statusBannerSequence == seq else { return }
+                        for view in statusItems {
+                            view.alpha = 1.0
+                            view.transform = .identity
+                        }
+                    },
+                    completion: { _ in
+                        if self.statusBannerSequence == seq {
+                            self.isStatusBannerVisible = false
+                        }
+                    }
+                )
             }
         }
     }

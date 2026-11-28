@@ -65,8 +65,22 @@ class IPodMusicLibrary {
             playlistGroups.insert(IPodPlaylistGroup(name: "File Lokal (Documents)", tracks: localTracks, nativePlaylist: nil), at: 0)
         }
 
-        self.allTracks = collectedTracks
+        self.allTracks = sortTracksAlphabetically(collectedTracks)
         self.playlists = playlistGroups
+    }
+
+    private func sortTracksAlphabetically(_ tracks: [IPodTrack]) -> [IPodTrack] {
+        return tracks.sorted { lhs, rhs in
+            let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+            if titleOrder != .orderedSame {
+                return titleOrder == .orderedAscending
+            }
+            let artistOrder = lhs.artist.localizedCaseInsensitiveCompare(rhs.artist)
+            if artistOrder != .orderedSame {
+                return artistOrder == .orderedAscending
+            }
+            return lhs.id < rhs.id
+        }
     }
 
     // Membuat playlist baru langsung di aplikasi Music bawaan iOS & menyinkronkan lagu terpilih
@@ -159,6 +173,6 @@ class IPodMusicLibrary {
                 artworkImage: artwork
             ))
         }
-        return result
+        return sortTracksAlphabetically(result)
     }
 }
