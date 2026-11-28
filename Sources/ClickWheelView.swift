@@ -3,6 +3,7 @@ import AudioToolbox
 
 protocol ClickWheelDelegate: AnyObject {
     func clickWheelDidScroll(steps: Int)
+    func clickWheelDidEndScrolling()
     func clickWheelDidPressMenu()
     func clickWheelDidPressSelect()
     func clickWheelDidLongPressSelect()
@@ -595,11 +596,16 @@ class ClickWheelView: UIView {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let didScroll = didScrollDuringTouch
         defer {
             lastAngle = nil
             accumulatedAngle = 0
+            didScrollDuringTouch = false
+            if didScroll {
+                delegate?.clickWheelDidEndScrolling()
+            }
         }
-        guard !didScrollDuringTouch, let touch = touches.first else { return }
+        guard !didScroll, let touch = touches.first else { return }
         let pt = touch.location(in: self)
         if centerButton.frame.contains(pt) { return }
 
@@ -623,6 +629,16 @@ class ClickWheelView: UIView {
             } else {
                 delegate?.clickWheelDidPressPlayPause()
             }
+        }
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let didScroll = didScrollDuringTouch
+        lastAngle = nil
+        accumulatedAngle = 0
+        didScrollDuringTouch = false
+        if didScroll {
+            delegate?.clickWheelDidEndScrolling()
         }
     }
 

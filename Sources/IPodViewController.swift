@@ -60,8 +60,9 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var watchdogRecoveriesForCurrentTrack: Int = 0
     private var currentStreamFallbacks: [(url: URL, userAgent: String)] = []
     private var didTryAndroidFallbackForCurrentTrack = false
-    private var lastWheelSeekTime: TimeInterval = 0
-    private var lastWheelSeekTarget: TimeInterval = 0
+    private var pendingWheelSeekTarget: TimeInterval?
+    private var committingWheelSeekTarget: TimeInterval?
+    private var committingWheelSeekDeadline: TimeInterval = 0
 
     override var prefersStatusBarHidden: Bool {
         return true
@@ -832,7 +833,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         screenView.moveSelection(by: steps)
     }
 
+    func clickWheelDidEndScrolling() {
+        commitPendingWheelSeek()
+    }
+
     func clickWheelDidPressMenu() {
+        pendingWheelSeekTarget = nil
         if isWheelTimerMode {
             if sleepSetMinutes > 0 || isSleepTimerActive {
                 setSleepTimerMinutes(0)
@@ -891,6 +897,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     func clickWheelDidPressSelect() {
+        pendingWheelSeekTarget = nil
         if isWheelTimerMode {
             if sleepSetMinutes > 0 && !isSleepTimerActive {
                 activateSleepTimer()
@@ -1273,6 +1280,9 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         clearItemObservers()
         resetWatchdogState()
+        pendingWheelSeekTarget = nil
+        committingWheelSeekTarget = nil
+        committingWheelSeekDeadline = 0
         if !isWatchdogRetry {
             watchdogRecoveriesForCurrentTrack = 0
             currentStreamFallbacks = []
@@ -1626,30 +1636,47 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         let validDur = (itemDur.isFinite && itemDur > 0) ? itemDur : track.duration
         guard validDur > 0 else { return }
 
-        let now = Date().timeIntervalSinceReferenceDate
         let rawCurrent = CMTimeGetSeconds(player.currentTime())
-        let baseSec: Double
-        if (now - lastWheelSeekTime) < 0.6 {
-            baseSec = lastWheelSeekTarget
-        } else {
-            baseSec = rawCurrent.isFinite ? rawCurrent : max(0.0, lastObservedElapsed)
-        }
+        let liveElapsed = rawCurrent.isFinite ? max(0.0, rawCurrent) : max(0.0, lastObservedElapsed)
+        let baseSec = pendingWheelSeekTarget ?? liveElapsed
         let maxTarget = max(0.0, validDur - 0.5)
         let targetSec = min(max(0.0, baseSec + delta), maxTarget)
 
-        lastWheelSeekTime = now
-        lastWheelSeekTarget = targetSec
-        resetWatchdogState()
-        lastObservedElapsed = targetSec
-        screenView.updateProgress(elapsed: targetSec, duration: validDur)
+        pendingWheelSeekTarget = targetSec
+        screenView.updateProgress(elapsed: liveElapsed, duration: validDur, previewSeekTarget: targetSec)
+    }
 
-        let targetTime = CMTime(seconds: targetSec, preferredTimescale: 600)
+    private func commitPendingWheelSeek() {
+        guard let targetSec = pendingWheelSeekTarget else { return }
+        pendingWheelSeekTarget = nil
+        guard isNowPlayingActive, nowPlayingBarMode == .duration, !isWheelTimerMode,
+              let player = player, currentQueue.indices.contains(currentTrackIndex) else { return }
+
+        let track = currentQueue[currentTrackIndex]
+        let itemDur = player.currentItem.map { CMTimeGetSeconds($0.duration) } ?? track.duration
+        let validDur = (itemDur.isFinite && itemDur > 0) ? itemDur : track.duration
+        guard validDur > 0 else { return }
+
+        let clampedTarget = min(max(0.0, targetSec), max(0.0, validDur - 0.5))
+        committingWheelSeekTarget = clampedTarget
+        committingWheelSeekDeadline = Date().timeIntervalSinceReferenceDate + 1.2
+        resetWatchdogState()
+        lastObservedElapsed = clampedTarget
+        screenView.updateProgress(elapsed: clampedTarget, duration: validDur)
+
+        let targetTime = CMTime(seconds: clampedTarget, preferredTimescale: 600)
         player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-            if self?.isPlaying == true && player.rate == 0 {
-                player.play()
+            DispatchQueue.main.async {
+                if self?.committingWheelSeekTarget == clampedTarget {
+                    self?.committingWheelSeekTarget = nil
+                    self?.committingWheelSeekDeadline = 0
+                }
+                if self?.isPlaying == true && player.rate == 0 {
+                    player.play()
+                }
             }
         }
-        updateNowPlayingInfo(track: track, elapsed: targetSec)
+        updateNowPlayingInfo(track: track, elapsed: clampedTarget)
     }
 
     private func togglePlayPause() {
@@ -1729,8 +1756,25 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             let validDur = (itemDur.isFinite && itemDur > 0) ? itemDur : track.duration
 
             if elapsed.isFinite {
-                self.screenView.updateProgress(elapsed: elapsed, duration: validDur)
-                self.updateNowPlayingInfo(track: track, elapsed: elapsed)
+                let now = Date().timeIntervalSinceReferenceDate
+                if let previewTarget = self.pendingWheelSeekTarget {
+                    self.screenView.updateProgress(elapsed: elapsed, duration: validDur, previewSeekTarget: previewTarget)
+                    self.updateNowPlayingInfo(track: track, elapsed: elapsed)
+                } else if let commitTarget = self.committingWheelSeekTarget, now < self.committingWheelSeekDeadline {
+                    if abs(elapsed - commitTarget) < 1.5 {
+                        self.committingWheelSeekTarget = nil
+                        self.committingWheelSeekDeadline = 0
+                        self.screenView.updateProgress(elapsed: elapsed, duration: validDur)
+                        self.updateNowPlayingInfo(track: track, elapsed: elapsed)
+                    } else {
+                        self.screenView.updateProgress(elapsed: commitTarget, duration: validDur)
+                    }
+                } else {
+                    self.committingWheelSeekTarget = nil
+                    self.committingWheelSeekDeadline = 0
+                    self.screenView.updateProgress(elapsed: elapsed, duration: validDur)
+                    self.updateNowPlayingInfo(track: track, elapsed: elapsed)
+                }
 
                 if self.isPlaying && player.rate == 0 {
                     if item.status == .readyToPlay && item.isPlaybackLikelyToKeepUp {

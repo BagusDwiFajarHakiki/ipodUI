@@ -2794,7 +2794,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         onArtworkDoubleTapped?()
     }
 
-    func updateProgress(elapsed: TimeInterval, duration: TimeInterval) {
+    func updateProgress(elapsed: TimeInterval, duration: TimeInterval, previewSeekTarget: TimeInterval? = nil) {
         let safeDur = max(duration, 1.0)
         lastElapsed = elapsed
         lastDuration = safeDur
@@ -2805,9 +2805,10 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             layoutLyricItemsFrame(at: visualLyricPos, smoothElapsed: elapsed)
         }
         if barMode != .duration && barMode != .lyrics { return }
-        let ratio = CGFloat(min(max(elapsed / safeDur, 0.0), 1.0))
+        let displayElapsed = previewSeekTarget ?? elapsed
+        let ratio = CGFloat(min(max(displayElapsed / safeDur, 0.0), 1.0))
         progressWidthConstraint.constant = progressTrack.bounds.width * ratio
-        elapsedLabel.text = formatTime(elapsed)
+        elapsedLabel.text = formatTime(displayElapsed)
         remainingLabel.text = "-\(formatTime(max(0, safeDur - elapsed)))"
     }
 
