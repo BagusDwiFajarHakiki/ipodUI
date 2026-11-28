@@ -326,6 +326,136 @@ final class IPodCircularLoadingView: UIView {
     }
 }
 
+final class IPodDownloadStatusButton: UIControl {
+    private let iconImageView = UIImageView()
+    private let progressRing = IPodCircularLoadingView()
+    private var currentState: IPodTrackDownloadState = .notDownloaded
+    private var currentTheme: IPodColorTheme = .darkPod
+
+    override var isHighlighted: Bool {
+        didSet {
+            alpha = isHighlighted ? 0.55 : 1.0
+        }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+
+        iconImageView.contentMode = .scaleAspectFit
+        iconImageView.isUserInteractionEnabled = false
+        iconImageView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(iconImageView)
+
+        progressRing.isHidden = true
+        progressRing.isUserInteractionEnabled = false
+        progressRing.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(progressRing)
+
+        NSLayoutConstraint.activate([
+            iconImageView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            iconImageView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconImageView.widthAnchor.constraint(equalToConstant: 16),
+            iconImageView.heightAnchor.constraint(equalToConstant: 16),
+
+            progressRing.centerXAnchor.constraint(equalTo: centerXAnchor),
+            progressRing.centerYAnchor.constraint(equalTo: centerYAnchor),
+            progressRing.widthAnchor.constraint(equalToConstant: 16),
+            progressRing.heightAnchor.constraint(equalToConstant: 16)
+        ])
+
+        renderState()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func applyTheme(_ theme: IPodColorTheme) {
+        currentTheme = theme
+        renderState()
+    }
+
+    func setState(_ state: IPodTrackDownloadState) {
+        currentState = state
+        renderState()
+    }
+
+    private func renderState() {
+        switch currentState {
+        case .notDownloaded:
+            progressRing.isHidden = true
+            progressRing.setProgress(0.0)
+            iconImageView.isHidden = false
+            iconImageView.image = makeDownloadTrayIcon()
+            iconImageView.tintColor = currentTheme.secondaryText
+
+        case .downloading(let progress):
+            iconImageView.isHidden = true
+            progressRing.isHidden = false
+            let ringColor = currentTheme == .darkPod ? UIColor.white : currentTheme.highlightTop
+            progressRing.setColor(ringColor)
+            progressRing.setProgress(CGFloat(progress))
+
+        case .downloaded:
+            progressRing.isHidden = true
+            progressRing.setProgress(0.0)
+            iconImageView.isHidden = false
+            iconImageView.image = makeDownloadedCheckIcon()
+            iconImageView.tintColor = currentTheme.highlightTop
+        }
+    }
+
+    private func makeDownloadTrayIcon() -> UIImage? {
+        let size = CGSize(width: 16, height: 16)
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        defer { UIGraphicsEndImageContext() }
+        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
+
+        ctx.setStrokeColor(UIColor.white.cgColor)
+        ctx.setLineWidth(1.6)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+
+        // Arrow down shaft + head
+        ctx.move(to: CGPoint(x: 8.0, y: 2.2))
+        ctx.addLine(to: CGPoint(x: 8.0, y: 10.2))
+        ctx.move(to: CGPoint(x: 5.0, y: 7.4))
+        ctx.addLine(to: CGPoint(x: 8.0, y: 10.5))
+        ctx.addLine(to: CGPoint(x: 11.0, y: 7.4))
+
+        // Tray
+        ctx.move(to: CGPoint(x: 2.6, y: 11.2))
+        ctx.addLine(to: CGPoint(x: 2.6, y: 13.5))
+        ctx.addLine(to: CGPoint(x: 13.4, y: 13.5))
+        ctx.addLine(to: CGPoint(x: 13.4, y: 11.2))
+        ctx.strokePath()
+
+        return UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
+    }
+
+    private func makeDownloadedCheckIcon() -> UIImage? {
+        let size = CGSize(width: 16, height: 16)
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        defer { UIGraphicsEndImageContext() }
+        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
+
+        ctx.setStrokeColor(UIColor.white.cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+
+        ctx.addEllipse(in: CGRect(x: 1.5, y: 1.5, width: 13.0, height: 13.0))
+        ctx.strokePath()
+
+        ctx.setLineWidth(1.7)
+        ctx.move(to: CGPoint(x: 5.0, y: 8.2))
+        ctx.addLine(to: CGPoint(x: 7.1, y: 10.4))
+        ctx.addLine(to: CGPoint(x: 11.2, y: 5.8))
+        ctx.strokePath()
+
+        return UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
+    }
+}
+
 class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
     var theme: IPodColorTheme = .darkPod {
         didSet { applyTheme() }
@@ -336,6 +466,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     var onActiveCoverImageChanged: ((UIImage?) -> Void)?
     var onStreamingRefreshTapped: (() -> Void)?
     var onStreamingSearchTapped: (() -> Void)?
+    var onDownloadButtonTapped: (() -> Void)?
 
     // Modern Seamless Status Bar
     private let headerBar = UIView()
@@ -415,6 +546,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let trackTitleLabel = UILabel()
     private let trackArtistLabel = UILabel()
     private let trackIndexLabel = UILabel()
+    private let downloadStatusButton = IPodDownloadStatusButton()
+    private var isCurrentTrackStreaming = false
     private let lyricsContainerView = UIView()
     private let lyricsSlotsContainer = UIView()
     private let lyricStatusLabel = UILabel()
@@ -646,6 +779,11 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         trackIndexLabel.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(trackIndexLabel)
 
+        downloadStatusButton.isHidden = true
+        downloadStatusButton.translatesAutoresizingMaskIntoConstraints = false
+        downloadStatusButton.addTarget(self, action: #selector(handleDownloadButtonTap), for: .touchUpInside)
+        nowPlayingContainer.addSubview(downloadStatusButton)
+
         lyricsContainerView.clipsToBounds = true
         lyricsContainerView.isHidden = true
         lyricsContainerView.alpha = 0.0
@@ -854,8 +992,13 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             trackArtistLabel.bottomAnchor.constraint(equalTo: artworkView.centerYAnchor, constant: 18),
 
             trackIndexLabel.leadingAnchor.constraint(equalTo: artworkView.trailingAnchor, constant: 14),
-            trackIndexLabel.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -18),
+            trackIndexLabel.trailingAnchor.constraint(lessThanOrEqualTo: downloadStatusButton.leadingAnchor, constant: -6),
             trackIndexLabel.bottomAnchor.constraint(equalTo: artworkView.bottomAnchor, constant: -2),
+
+            downloadStatusButton.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -16),
+            downloadStatusButton.centerYAnchor.constraint(equalTo: trackIndexLabel.centerYAnchor),
+            downloadStatusButton.widthAnchor.constraint(equalToConstant: 26),
+            downloadStatusButton.heightAnchor.constraint(equalToConstant: 26),
 
             lyricsContainerView.topAnchor.constraint(equalTo: artworkView.topAnchor),
             lyricsContainerView.bottomAnchor.constraint(equalTo: artworkView.bottomAnchor),
@@ -1045,6 +1188,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         progressKnob.backgroundColor = theme == .darkPod ? .white : theme.highlightBottom
         tableView.reloadData()
         coverCollectionView.reloadData()
+        downloadStatusButton.applyTheme(theme)
         lyricStyledActiveByIndex.removeAll()
         instrumentalSpinnerView.setColor(theme == .darkPod ? .white : theme.highlightBottom)
         renderLyricSlots(animatedDirection: 0)
@@ -1468,7 +1612,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         trackTitleLabel.text = track.title
         trackArtistLabel.text = track.artist
-        trackIndexLabel.text = "\(index + 1) / \(total)"
+        trackIndexLabel.text = "\(index + 1) of \(total)"
 
         let isLyricsMode = (barMode == .lyrics)
         applyLyricsLayout(active: isLyricsMode, animated: false)
@@ -1495,6 +1639,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             artworkReflectionView.alpha = 0.0
             trackTitleLabel.alpha = 0.0
             trackIndexLabel.alpha = 0.0
+            downloadStatusButton.alpha = 0.0
             trackArtistLabel.alpha = 0.0
             lyricsContainerView.alpha = 0.0
             progressTouchArea.alpha = 0.0
@@ -1514,6 +1659,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                     self.artworkReflectionView.alpha = targetReflectionAlpha
                     self.trackTitleLabel.alpha = 1.0
                     self.trackIndexLabel.alpha = isLyricsMode ? 0.0 : 1.0
+                    self.downloadStatusButton.alpha = (isLyricsMode || !self.isCurrentTrackStreaming) ? 0.0 : 1.0
                     self.trackArtistLabel.alpha = isLyricsMode ? 0.0 : 1.0
                     self.lyricsContainerView.alpha = isLyricsMode ? 1.0 : 0.0
                     self.progressTouchArea.alpha = 1.0
@@ -1657,6 +1803,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                         self.trackArtistLabel.alpha = 0.0
                         self.trackArtistLabel.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
                         self.trackIndexLabel.alpha = 0.0
+                        self.downloadStatusButton.alpha = 0.0
                         self.artworkReflectionView.alpha = 0.18
                         self.lyricsContainerView.alpha = 1.0
                         self.lyricsContainerView.transform = .identity
@@ -1665,15 +1812,18 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                         if self.barMode == .lyrics {
                             self.trackArtistLabel.isHidden = true
                             self.trackIndexLabel.isHidden = true
+                            self.downloadStatusButton.isHidden = true
                         }
                     }
                 )
             } else {
                 trackArtistLabel.isHidden = false
                 trackIndexLabel.isHidden = false
+                downloadStatusButton.isHidden = !isCurrentTrackStreaming
                 trackArtistLabel.alpha = 0.0
                 trackArtistLabel.transform = CGAffineTransform(translationX: 0, y: 4).scaledBy(x: 0.92, y: 0.92)
                 trackIndexLabel.alpha = 0.0
+                downloadStatusButton.alpha = 0.0
 
                 UIView.animate(
                     withDuration: 0.58,
@@ -1703,6 +1853,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                         self.trackArtistLabel.alpha = 1.0
                         self.trackArtistLabel.transform = .identity
                         self.trackIndexLabel.alpha = 1.0
+                        self.downloadStatusButton.alpha = self.isCurrentTrackStreaming ? 1.0 : 0.0
                     }
                 )
             }
@@ -1712,6 +1863,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             trackArtistLabel.transform = .identity
             trackIndexLabel.isHidden = active
             trackIndexLabel.alpha = active ? 0.0 : 1.0
+            downloadStatusButton.isHidden = active || !isCurrentTrackStreaming
+            downloadStatusButton.alpha = (active || !isCurrentTrackStreaming) ? 0.0 : 1.0
             artworkReflectionView.alpha = active ? 0.18 : 0.28
             lyricsContainerView.isHidden = !active
             lyricsContainerView.alpha = active ? 1.0 : 0.0
@@ -2474,6 +2627,24 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             instrumentalSpinnerView.transform = .identity
             instrumentalSpinnerView.alpha = 1.0
         }
+    }
+
+    func updateNowPlayingDownloadState(_ state: IPodTrackDownloadState?, isStreamingTrack: Bool) {
+        isCurrentTrackStreaming = isStreamingTrack
+        if !isStreamingTrack {
+            downloadStatusButton.isHidden = true
+            downloadStatusButton.alpha = 0.0
+            return
+        }
+        downloadStatusButton.applyTheme(theme)
+        downloadStatusButton.setState(state ?? .notDownloaded)
+        let shouldHide = (barMode == .lyrics)
+        downloadStatusButton.isHidden = shouldHide
+        downloadStatusButton.alpha = shouldHide ? 0.0 : 1.0
+    }
+
+    @objc private func handleDownloadButtonTap() {
+        onDownloadButtonTapped?()
     }
 
     func updateVolumeDisplay(_ volume: Float) {

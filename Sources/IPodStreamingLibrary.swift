@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import MediaPlayer
+import AVFoundation
 
 struct IPodResolvedStream {
     let url: URL
@@ -12,6 +13,94 @@ struct IPodResolvedStream {
 enum IPodStreamResolutionResult {
     case playable(IPodResolvedStream)
     case failed(reason: String)
+}
+
+enum IPodTrackDownloadState: Equatable {
+    case notDownloaded
+    case downloading(progress: Double)
+    case downloaded
+}
+
+private final class StreamAudioDownloadSession: NSObject, URLSessionDownloadDelegate {
+    private let onProgress: (Double) -> Void
+    private let onComplete: (URL?, String?) -> Void
+    private var session: URLSession?
+    private var isFinished = false
+
+    init(
+        request: URLRequest,
+        onProgress: @escaping (Double) -> Void,
+        onComplete: @escaping (URL?, String?) -> Void
+    ) {
+        self.onProgress = onProgress
+        self.onComplete = onComplete
+        super.init()
+
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 20.0
+        cfg.timeoutIntervalForResource = 180.0
+        let urlSession = URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
+        self.session = urlSession
+        urlSession.downloadTask(with: request).resume()
+    }
+
+    func cancel() {
+        isFinished = true
+        session?.invalidateAndCancel()
+        session = nil
+    }
+
+    private func finish(fileURL: URL?, errorReason: String?) {
+        guard !isFinished else { return }
+        isFinished = true
+        session?.finishTasksAndInvalidate()
+        session = nil
+        onComplete(fileURL, errorReason)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        guard !isFinished, totalBytesExpectedToWrite > 0 else { return }
+        let ratio = min(max(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite), 0.0), 1.0)
+        onProgress(ratio)
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        if let http = downloadTask.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            finish(fileURL: nil, errorReason: "HTTP \(http.statusCode)")
+            return
+        }
+
+        let attrs = try? FileManager.default.attributesOfItem(atPath: location.path)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        guard size >= 24_000 else {
+            finish(fileURL: nil, errorReason: "File audio tidak lengkap")
+            return
+        }
+
+        let tempDest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ipod_dl_\(UUID().uuidString).mp4")
+        do {
+            if FileManager.default.fileExists(atPath: tempDest.path) {
+                try FileManager.default.removeItem(at: tempDest)
+            }
+            try FileManager.default.moveItem(at: location, to: tempDest)
+            finish(fileURL: tempDest, errorReason: nil)
+        } catch {
+            finish(fileURL: nil, errorReason: error.localizedDescription)
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error {
+            finish(fileURL: nil, errorReason: error.localizedDescription)
+        }
+    }
 }
 
 private enum InnerTubeClient {
@@ -105,10 +194,16 @@ final class IPodStreamingLibrary {
     private(set) var isFetchingSongs: Bool = false
     private(set) var lastFetchWasNetworkError: Bool = false
     var onTrackArtworkLoaded: ((String, UIImage) -> Void)?
+    var onDownloadStateChanged: ((String, IPodTrackDownloadState) -> Void)?
+    var onDownloadCompleted: ((String, Bool, String?) -> Void)?
 
     private var videoIdByTrackId: [String: String] = [:]
     private var thumbnailURLByTrackId: [String: String] = [:]
     private var resolvedStreamCache: [String: IPodResolvedStream] = [:]
+    private var activeDownloadStates: [String: Double] = [:]
+    private var activeDownloadSessions: [String: StreamAudioDownloadSession] = [:]
+    private let downloadStateLock = NSLock()
+    private let downloadedMapDefaultsKey = "ipod_downloaded_streaming_map_v1"
     private var realArtworkByURL: [String: UIImage] = [:]
     private var realArtworkByVideoId: [String: UIImage] = [:]
     private var placeholderCache: [String: UIImage] = [:]
@@ -1777,5 +1872,319 @@ final class IPodStreamingLibrary {
             placeholderCache[seed] = img
         }
         return img
+    }
+
+    // MARK: - Streaming Audio Download & Delete (Saved into Documents / Music)
+    private func documentsDirectoryURL() -> URL {
+        return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+
+    private func loadDownloadedMap() -> [String: String] {
+        return UserDefaults.standard.dictionary(forKey: downloadedMapDefaultsKey) as? [String: String] ?? [:]
+    }
+
+    private func saveDownloadedMap(_ map: [String: String]) {
+        UserDefaults.standard.set(map, forKey: downloadedMapDefaultsKey)
+    }
+
+    func downloadedFileURL(forVideoId videoId: String) -> URL? {
+        guard !videoId.isEmpty else { return nil }
+        downloadStateLock.lock()
+        var map = loadDownloadedMap()
+        let filename = map[videoId]
+        downloadStateLock.unlock()
+
+        guard let name = filename, !name.isEmpty else { return nil }
+        let fileURL = documentsDirectoryURL().appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            return fileURL
+        }
+
+        downloadStateLock.lock()
+        map.removeValue(forKey: videoId)
+        saveDownloadedMap(map)
+        downloadStateLock.unlock()
+        return nil
+    }
+
+    func downloadState(for track: IPodTrack) -> IPodTrackDownloadState {
+        guard track.id.hasPrefix("innertube_"),
+              let vid = videoId(for: track), !vid.isEmpty else {
+            return .notDownloaded
+        }
+        return downloadState(forVideoId: vid)
+    }
+
+    func downloadState(forVideoId videoId: String) -> IPodTrackDownloadState {
+        downloadStateLock.lock()
+        if let prog = activeDownloadStates[videoId] {
+            downloadStateLock.unlock()
+            return .downloading(progress: prog)
+        }
+        downloadStateLock.unlock()
+
+        if downloadedFileURL(forVideoId: videoId) != nil {
+            return .downloaded
+        }
+        return .notDownloaded
+    }
+
+    private func emitDownloadState(videoId: String, state: IPodTrackDownloadState) {
+        DispatchQueue.main.async {
+            self.onDownloadStateChanged?(videoId, state)
+        }
+    }
+
+    private func sanitizedAudioFilename(title: String, videoId: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        let cleaned = title.components(separatedBy: invalid).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        let collapsed = cleaned.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        let base = collapsed.isEmpty ? videoId : String(collapsed.prefix(56))
+        return "\(base) [\(videoId)].m4a"
+    }
+
+    func downloadTrack(_ track: IPodTrack) {
+        guard track.id.hasPrefix("innertube_"),
+              let vid = videoId(for: track), !vid.isEmpty else { return }
+
+        guard case .notDownloaded = downloadState(forVideoId: vid) else { return }
+
+        downloadStateLock.lock()
+        activeDownloadStates[vid] = 0.02
+        downloadStateLock.unlock()
+        emitDownloadState(videoId: vid, state: .downloading(progress: 0.02))
+
+        collectDirectDownloadCandidates(for: track) { [weak self] candidates in
+            guard let self = self else { return }
+            guard !candidates.isEmpty else {
+                self.finishDownloadWithFailure(videoId: vid, reason: "Stream tidak mendukung unduhan")
+                return
+            }
+
+            self.downloadFromCandidates(candidates, index: 0, track: track, videoId: vid)
+        }
+    }
+
+    private func collectDirectDownloadCandidates(
+        for track: IPodTrack,
+        completion: @escaping ([(url: URL, userAgent: String)]) -> Void
+    ) {
+        func extractNonHLS(from stream: IPodResolvedStream) -> [(url: URL, userAgent: String)] {
+            var list: [(url: URL, userAgent: String)] = []
+            let all = [(url: stream.url, userAgent: stream.userAgent)] + stream.fallbackCandidates
+            for item in all {
+                let abs = item.url.absoluteString.lowercased()
+                if item.url.pathExtension.lowercased() == "m3u8" || abs.contains(".m3u8") || abs.contains("/manifest/hls") {
+                    continue
+                }
+                list.append(item)
+            }
+            return list
+        }
+
+        if let cached = resolvedStreamCache[track.id] {
+            let direct = extractNonHLS(from: cached)
+            if !direct.isEmpty {
+                completion(direct)
+                return
+            }
+        }
+
+        resolvePlayableAudio(for: track, forceRefresh: true, preferAlternateClient: false) { result in
+            if case .playable(let stream) = result {
+                let direct = extractNonHLS(from: stream)
+                if !direct.isEmpty {
+                    completion(direct)
+                    return
+                }
+            }
+            self.resolvePlayableAudio(for: track, forceRefresh: true, preferAlternateClient: true) { altResult in
+                if case .playable(let stream) = altResult {
+                    completion(extractNonHLS(from: stream))
+                } else {
+                    completion([])
+                }
+            }
+        }
+    }
+
+    private func downloadFromCandidates(
+        _ candidates: [(url: URL, userAgent: String)],
+        index: Int,
+        track: IPodTrack,
+        videoId: String
+    ) {
+        guard candidates.indices.contains(index) else {
+            finishDownloadWithFailure(videoId: videoId, reason: "Gagal mengunduh audio")
+            return
+        }
+
+        let cand = candidates[index]
+        var request = URLRequest(url: cand.url)
+        request.timeoutInterval = 20.0
+        request.setValue(cand.userAgent, forHTTPHeaderField: "User-Agent")
+
+        let dlSession = StreamAudioDownloadSession(
+            request: request,
+            onProgress: { [weak self] byteRatio in
+                guard let self = self else { return }
+                let mapped = 0.02 + byteRatio * 0.80
+                self.downloadStateLock.lock()
+                guard self.activeDownloadStates[videoId] != nil else {
+                    self.downloadStateLock.unlock()
+                    return
+                }
+                self.activeDownloadStates[videoId] = mapped
+                self.downloadStateLock.unlock()
+                self.emitDownloadState(videoId: videoId, state: .downloading(progress: mapped))
+            },
+            onComplete: { [weak self] tempURL, errorReason in
+                guard let self = self else { return }
+                self.downloadStateLock.lock()
+                self.activeDownloadSessions.removeValue(forKey: videoId)
+                self.downloadStateLock.unlock()
+
+                if let tempURL = tempURL {
+                    self.exportDownloadedAudioToM4A(tempFileURL: tempURL, track: track, videoId: videoId)
+                } else {
+                    self.downloadFromCandidates(candidates, index: index + 1, track: track, videoId: videoId)
+                    _ = errorReason
+                }
+            }
+        )
+
+        downloadStateLock.lock()
+        activeDownloadSessions[videoId] = dlSession
+        downloadStateLock.unlock()
+    }
+
+    private func exportDownloadedAudioToM4A(tempFileURL: URL, track: IPodTrack, videoId: String) {
+        downloadStateLock.lock()
+        activeDownloadStates[videoId] = 0.85
+        downloadStateLock.unlock()
+        emitDownloadState(videoId: videoId, state: .downloading(progress: 0.85))
+
+        let asset = AVURLAsset(url: tempFileURL)
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            try? FileManager.default.removeItem(at: tempFileURL)
+            finishDownloadWithFailure(videoId: videoId, reason: "Ekspor M4A tidak didukung")
+            return
+        }
+
+        let filename = sanitizedAudioFilename(title: track.title, videoId: videoId)
+        let destURL = documentsDirectoryURL().appendingPathComponent(filename)
+        try? FileManager.default.removeItem(at: destURL)
+
+        var metadata: [AVMetadataItem] = []
+        let titleItem = AVMutableMetadataItem()
+        titleItem.identifier = .commonIdentifierTitle
+        titleItem.value = track.title as NSString
+        metadata.append(titleItem)
+
+        let artistItem = AVMutableMetadataItem()
+        artistItem.identifier = .commonIdentifierArtist
+        artistItem.value = track.artist as NSString
+        metadata.append(artistItem)
+
+        let albumValue = (track.album.isEmpty || track.album == "YouTube Music") ? "Streaming" : track.album
+        let albumItem = AVMutableMetadataItem()
+        albumItem.identifier = .commonIdentifierAlbumName
+        albumItem.value = albumValue as NSString
+        metadata.append(albumItem)
+
+        if let art = realArtworkByVideoId[videoId] ?? track.artworkImage,
+           let jpegData = art.jpegData(compressionQuality: 0.88) {
+            let artItem = AVMutableMetadataItem()
+            artItem.identifier = .commonIdentifierArtwork
+            artItem.value = jpegData as NSData
+            metadata.append(artItem)
+        }
+
+        exporter.outputURL = destURL
+        exporter.outputFileType = .m4a
+        exporter.metadata = metadata
+        exporter.shouldOptimizeForNetworkUse = true
+
+        DispatchQueue.main.async {
+            let pollTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self, weak exporter] timer in
+                guard let self = self, let exp = exporter else {
+                    timer.invalidate()
+                    return
+                }
+                if exp.status == .exporting || exp.status == .waiting {
+                    let mapped = 0.85 + Double(exp.progress) * 0.14
+                    self.downloadStateLock.lock()
+                    if self.activeDownloadStates[videoId] != nil {
+                        self.activeDownloadStates[videoId] = mapped
+                    }
+                    self.downloadStateLock.unlock()
+                    self.emitDownloadState(videoId: videoId, state: .downloading(progress: mapped))
+                } else {
+                    timer.invalidate()
+                }
+            }
+
+            exporter.exportAsynchronously { [weak self] in
+                DispatchQueue.main.async { pollTimer.invalidate() }
+                try? FileManager.default.removeItem(at: tempFileURL)
+
+                guard let self = self else { return }
+                switch exporter.status {
+                case .completed:
+                    self.downloadStateLock.lock()
+                    var map = self.loadDownloadedMap()
+                    map[videoId] = filename
+                    self.saveDownloadedMap(map)
+                    self.activeDownloadStates.removeValue(forKey: videoId)
+                    self.downloadStateLock.unlock()
+
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        IPodMusicLibrary.shared.reloadAllSources()
+                        DispatchQueue.main.async {
+                            self.onDownloadStateChanged?(videoId, .downloaded)
+                            self.onDownloadCompleted?(videoId, true, nil)
+                        }
+                    }
+
+                default:
+                    try? FileManager.default.removeItem(at: destURL)
+                    let msg = exporter.error?.localizedDescription ?? "Gagal menyimpan lagu"
+                    self.finishDownloadWithFailure(videoId: videoId, reason: msg)
+                }
+            }
+        }
+    }
+
+    private func finishDownloadWithFailure(videoId: String, reason: String) {
+        downloadStateLock.lock()
+        activeDownloadStates.removeValue(forKey: videoId)
+        activeDownloadSessions.removeValue(forKey: videoId)
+        downloadStateLock.unlock()
+
+        DispatchQueue.main.async {
+            self.onDownloadStateChanged?(videoId, .notDownloaded)
+            self.onDownloadCompleted?(videoId, false, reason)
+        }
+    }
+
+    @discardableResult
+    func deleteDownloadedTrack(for track: IPodTrack) -> Bool {
+        guard track.id.hasPrefix("innertube_"),
+              let vid = videoId(for: track), !vid.isEmpty else { return false }
+
+        downloadStateLock.lock()
+        var map = loadDownloadedMap()
+        let filename = map.removeValue(forKey: vid)
+        saveDownloadedMap(map)
+        downloadStateLock.unlock()
+
+        if let name = filename {
+            let fileURL = documentsDirectoryURL().appendingPathComponent(name)
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+
+        IPodMusicLibrary.shared.reloadAllSources()
+        emitDownloadState(videoId: vid, state: .notDownloaded)
+        return true
     }
 }

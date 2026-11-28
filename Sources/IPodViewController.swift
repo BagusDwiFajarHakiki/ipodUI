@@ -124,6 +124,29 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             self?.presentStreamingSearchPopup()
         }
 
+        screenView.onDownloadButtonTapped = { [weak self] in
+            self?.handleNowPlayingDownloadAction()
+        }
+
+        IPodStreamingLibrary.shared.onDownloadStateChanged = { [weak self] videoId, state in
+            guard let self = self,
+                  self.currentQueue.indices.contains(self.currentTrackIndex) else { return }
+            let track = self.currentQueue[self.currentTrackIndex]
+            guard track.id.hasPrefix("innertube_"),
+                  IPodStreamingLibrary.shared.videoId(for: track) == videoId else { return }
+            self.screenView.updateNowPlayingDownloadState(state, isStreamingTrack: true)
+        }
+
+        IPodStreamingLibrary.shared.onDownloadCompleted = { [weak self] _, success, errorMessage in
+            guard let self = self else { return }
+            if success {
+                self.screenView.showStatusBanner("Tersimpan ke Music")
+            } else {
+                let reason = errorMessage ?? "Coba lagi"
+                self.screenView.showStatusBanner("Gagal download: \(reason)")
+            }
+        }
+
         IPodStreamingLibrary.shared.onTrackArtworkLoaded = { [weak self] trackId, image in
             guard let self = self else { return }
             self.screenView.updateCoverTrackArtwork(trackId: trackId, image: image)
@@ -1132,6 +1155,39 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             transitionDirection: transitionDirection,
             animateFromCoverFlow: animateFromCoverFlow
         )
+        syncDownloadButtonState(for: track)
+    }
+
+    private func syncDownloadButtonState(for track: IPodTrack) {
+        let isStreaming = track.id.hasPrefix("innertube_")
+        let state = isStreaming ? IPodStreamingLibrary.shared.downloadState(for: track) : nil
+        screenView.updateNowPlayingDownloadState(state, isStreamingTrack: isStreaming)
+    }
+
+    private func handleNowPlayingDownloadAction() {
+        guard currentQueue.indices.contains(currentTrackIndex) else { return }
+        let track = currentQueue[currentTrackIndex]
+        guard track.id.hasPrefix("innertube_") else { return }
+
+        switch IPodStreamingLibrary.shared.downloadState(for: track) {
+        case .notDownloaded:
+            IPodStreamingLibrary.shared.downloadTrack(track)
+        case .downloading:
+            screenView.showStatusBanner("Sedang mengunduh...")
+        case .downloaded:
+            let alert = UIAlertController(
+                title: "Hapus Lagu?",
+                message: "Hapus \"\(track.title)\" dari daftar lagu Music?",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "Batal", style: .cancel))
+            alert.addAction(UIAlertAction(title: "Hapus", style: .destructive) { [weak self] _ in
+                if IPodStreamingLibrary.shared.deleteDownloadedTrack(for: track) {
+                    self?.screenView.showStatusBanner("Lagu dihapus dari Music")
+                }
+            })
+            present(alert, animated: true)
+        }
     }
 
     private func clearItemObservers() {
@@ -1195,6 +1251,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 transitionDirection: transitionDirection,
                 animateFromCoverFlow: false
             )
+            syncDownloadButtonState(for: track)
         }
 
         if !isWatchdogRetry {
