@@ -461,11 +461,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         didSet { applyTheme() }
     }
 
-    var onCoverFlowTrackSelected: ((Int) -> Void)?
-    var onSeekRatioChanged: ((Double, Bool) -> Void)?
     var onActiveCoverImageChanged: ((UIImage?) -> Void)?
-    var onStreamingRefreshTapped: (() -> Void)?
-    var onStreamingSearchTapped: (() -> Void)?
     var onDownloadButtonTapped: (() -> Void)?
     var onArtworkDoubleTapped: (() -> Void)?
 
@@ -572,7 +568,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let elapsedLabel = UILabel()
     private let remainingLabel = UILabel()
     private var progressWidthConstraint: NSLayoutConstraint!
-    private var isScrubbing = false
     private(set) var barMode: IPodNowPlayingBarMode = .duration
     private var lastElapsed: TimeInterval = 0
     private var lastDuration: TimeInterval = 1
@@ -684,6 +679,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
         // Cover Flow Container
         coverFlowContainer.isHidden = true
+        coverFlowContainer.isUserInteractionEnabled = false
         coverFlowContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(coverFlowContainer)
 
@@ -698,7 +694,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         coverCollectionView.register(IPodCoverFlowCell.self, forCellWithReuseIdentifier: "CoverCell")
         coverCollectionView.backgroundColor = .clear
         coverCollectionView.showsHorizontalScrollIndicator = false
-        coverCollectionView.decelerationRate = .fast
+        coverCollectionView.isScrollEnabled = false
+        coverCollectionView.isUserInteractionEnabled = false
         coverCollectionView.translatesAutoresizingMaskIntoConstraints = false
         coverFlowContainer.addSubview(coverCollectionView)
 
@@ -793,10 +790,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lyricsContainerView.clipsToBounds = true
         lyricsContainerView.isHidden = true
         lyricsContainerView.alpha = 0.0
-        lyricsContainerView.isUserInteractionEnabled = true
+        lyricsContainerView.isUserInteractionEnabled = false
         lyricsContainerView.translatesAutoresizingMaskIntoConstraints = false
-        let tapLyrics = UITapGestureRecognizer(target: self, action: #selector(handleLyricsTap))
-        lyricsContainerView.addGestureRecognizer(tapLyrics)
         nowPlayingContainer.addSubview(lyricsContainerView)
 
         lyricsSlotsContainer.backgroundColor = .clear
@@ -827,10 +822,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         nowPlayingContainer.addSubview(remainingLabel)
 
         progressTouchArea.backgroundColor = .clear
-        progressTouchArea.isUserInteractionEnabled = true
+        progressTouchArea.isUserInteractionEnabled = false
         progressTouchArea.translatesAutoresizingMaskIntoConstraints = false
-        let panSeek = UIPanGestureRecognizer(target: self, action: #selector(handleProgressScrub(_:)))
-        progressTouchArea.addGestureRecognizer(panSeek)
         nowPlayingContainer.addSubview(progressTouchArea)
 
         progressTrack.layer.cornerRadius = 1.5
@@ -1357,26 +1350,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lyricStyledActiveByIndex.removeAll()
         instrumentalSpinnerView.setColor(theme == .darkPod ? .white : theme.highlightBottom)
         renderLyricSlots(animatedDirection: 0)
-    }
-
-    // MARK: - Touchscreen Scrubbing
-    @objc private func handleProgressScrub(_ gesture: UIPanGestureRecognizer) {
-        let pt = gesture.location(in: progressTrack)
-        let width = max(progressTrack.bounds.width, 1.0)
-        let ratio = Double(min(max(pt.x / width, 0.0), 1.0))
-
-        switch gesture.state {
-        case .began, .changed:
-            isScrubbing = true
-            progressWidthConstraint.constant = CGFloat(ratio) * width
-            onSeekRatioChanged?(ratio, false)
-        case .ended, .cancelled:
-            isScrubbing = false
-            progressWidthConstraint.constant = CGFloat(ratio) * width
-            onSeekRatioChanged?(ratio, true)
-        default:
-            break
-        }
     }
 
     func updatePlayState(isPlaying: Bool) {
@@ -2118,18 +2091,19 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         layoutLyricItemsFrame(at: visualLyricPos, smoothElapsed: currentSmoothLyricsElapsed())
     }
 
-    @objc private func handleLyricsTap() {
+    @discardableResult
+    func returnToActiveLyricsIfNeeded() -> Bool {
         guard barMode == .lyrics,
               !nowPlayingContainer.isHidden,
               let lyrics = currentLyrics,
               lyrics.isSynced,
-              !lyricDisplayItems.isEmpty else { return }
+              !lyricDisplayItems.isEmpty else { return false }
 
         let smoothElapsed = currentSmoothLyricsElapsed()
         let targetIndex = min(max(0, activeDisplayIndex ?? computeActiveDisplayIndex(for: smoothElapsed) ?? 0), lyricDisplayItems.count - 1)
         let targetPos = CGFloat(targetIndex)
         let dist = abs(targetPos - visualLyricPos)
-        guard !isLyricsAutoScroll || displayLyricCenterIndex != targetIndex || dist > 0.05 else { return }
+        guard !isLyricsAutoScroll || displayLyricCenterIndex != targetIndex || dist > 0.05 else { return false }
 
         isLyricsAutoScroll = true
         isManualFastScrolling = false
@@ -2141,6 +2115,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         lyricAnimDuration = min(1.30, max(0.46, 0.40 + Double(dist) * 0.036))
         updateLyricsDisplayLinkState()
         layoutLyricItemsFrame(at: visualLyricPos, smoothElapsed: smoothElapsed)
+        return true
     }
 
     private func isAnimatingLyricPosition() -> Bool {
@@ -2819,7 +2794,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         onArtworkDoubleTapped?()
     }
 
-    func updateProgress(elapsed: TimeInterval, duration: TimeInterval, fromScrub: Bool = false) {
+    func updateProgress(elapsed: TimeInterval, duration: TimeInterval) {
         let safeDur = max(duration, 1.0)
         lastElapsed = elapsed
         lastDuration = safeDur
@@ -2830,11 +2805,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             layoutLyricItemsFrame(at: visualLyricPos, smoothElapsed: elapsed)
         }
         if barMode != .duration && barMode != .lyrics { return }
-        if isScrubbing && !fromScrub { return }
-        if !fromScrub {
-            let ratio = CGFloat(min(max(elapsed / safeDur, 0.0), 1.0))
-            progressWidthConstraint.constant = progressTrack.bounds.width * ratio
-        }
+        let ratio = CGFloat(min(max(elapsed / safeDur, 0.0), 1.0))
+        progressWidthConstraint.constant = progressTrack.bounds.width * ratio
         elapsedLabel.text = formatTime(elapsed)
         remainingLabel.text = "-\(formatTime(max(0, safeDur - elapsed)))"
     }
@@ -2976,60 +2948,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         applyCoverFlowTransforms()
     }
 
-    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        if indexPath.item == selectedIndex {
-            guard coverItems.indices.contains(indexPath.item) else { return }
-            switch coverItems[indexPath.item] {
-            case .search:
-                onStreamingSearchTapped?()
-            case .refresh:
-                onStreamingRefreshTapped?()
-            case .track:
-                let trackIdx = indexPath.item - (hasLeadingSearch ? 1 : 0)
-                if coverTracks.indices.contains(trackIdx) {
-                    onCoverFlowTrackSelected?(trackIdx)
-                }
-            }
-        } else {
-            selectedIndex = indexPath.item
-            let stepStride = coverItemWidth + coverItemSpacing
-            targetCoverOffsetX = CGFloat(selectedIndex) * stepStride
-            updateCoverFlowCaption(for: selectedIndex)
-            startSmoothScrollDisplayLink()
-        }
-    }
-
-    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        if scrollView === coverCollectionView {
-            stopSmoothScrollDisplayLink()
-        }
-    }
-
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard scrollView === coverCollectionView else { return }
         applyCoverFlowTransforms()
-
-        let stepStride = coverItemWidth + coverItemSpacing
-        let rawIndex = Int(round(coverCollectionView.contentOffset.x / stepStride))
-        let clamped = min(max(0, rawIndex), max(0, coverItems.count - 1))
-        if clamped != selectedIndex {
-            selectedIndex = clamped
-            updateCoverFlowCaption(for: selectedIndex)
-        }
-    }
-
-    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
-        guard scrollView === coverCollectionView else { return }
-        let stepStride = coverItemWidth + coverItemSpacing
-        let rawIndex = Int(round(targetContentOffset.pointee.x / stepStride))
-        let clamped = min(max(0, rawIndex), max(0, coverItems.count - 1))
-        targetCoverOffsetX = CGFloat(clamped) * stepStride
-        targetContentOffset.pointee.x = targetCoverOffsetX
-    }
-
-    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-        if scrollView === coverCollectionView {
-            triggerCenterCoverSpringSettle()
-        }
     }
 }

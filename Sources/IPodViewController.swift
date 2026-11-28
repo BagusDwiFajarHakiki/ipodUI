@@ -78,42 +78,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         clickWheel.delegate = self
 
-        screenView.onCoverFlowTrackSelected = { [weak self] index in
-            guard let self = self else { return }
-            if let top = self.menuStack.last, case .streamingSongs(let pageIndex) = top.node {
-                let pageData = IPodStreamingLibrary.shared.tracksPage(pageIndex: pageIndex)
-                if pageData.tracks.indices.contains(index) {
-                    let chosen = pageData.tracks[index]
-                    self.startQueue(
-                        tracks: IPodStreamingLibrary.shared.allStreamingTracks,
-                        at: 0,
-                        selectedTrack: chosen,
-                        useRelatedOrder: true
-                    )
-                }
-                return
-            }
-
-            let songs = IPodMusicLibrary.shared.allTracks
-            if songs.indices.contains(index) {
-                self.startQueue(tracks: songs, at: index, useRelatedOrder: false)
-            }
-        }
-
-        screenView.onSeekRatioChanged = { [weak self] ratio, isFinished in
-            self?.seekToRatio(ratio, isFinished: isFinished)
-        }
-
         screenView.onActiveCoverImageChanged = { [weak self] image in
             self?.updateAmbientGlow(from: image)
-        }
-
-        screenView.onStreamingRefreshTapped = { [weak self] in
-            self?.refreshStreamingList()
-        }
-
-        screenView.onStreamingSearchTapped = { [weak self] in
-            self?.presentStreamingSearchPopup()
         }
 
         screenView.onDownloadButtonTapped = { [weak self] in
@@ -876,6 +842,9 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             return
         }
         if isNowPlayingActive {
+            if nowPlayingBarMode == .lyrics && screenView.returnToActiveLyricsIfNeeded() {
+                return
+            }
             let activeIndex: Int
             if let top = menuStack.last, case .allSongs = top.node,
                currentQueue.indices.contains(currentTrackIndex),
@@ -1681,28 +1650,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             }
         }
         updateNowPlayingInfo(track: track, elapsed: targetSec)
-    }
-
-    private func seekToRatio(_ ratio: Double, isFinished: Bool) {
-        guard let player = player, currentQueue.indices.contains(currentTrackIndex) else { return }
-        let track = currentQueue[currentTrackIndex]
-        let itemDur = player.currentItem.map { CMTimeGetSeconds($0.duration) } ?? track.duration
-        let validDur = (itemDur.isFinite && itemDur > 0) ? itemDur : track.duration
-        guard validDur > 0 else { return }
-
-        let targetSec = validDur * ratio
-        screenView.updateProgress(elapsed: targetSec, duration: validDur, fromScrub: true)
-
-        if isFinished {
-            resetWatchdogState()
-            let targetTime = CMTime(seconds: targetSec, preferredTimescale: 600)
-            player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                if self?.isPlaying == true && player.rate == 0 {
-                    player.play()
-                }
-            }
-            updateNowPlayingInfo(track: track, elapsed: targetSec)
-        }
     }
 
     private func togglePlayPause() {
