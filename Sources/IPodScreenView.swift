@@ -3,7 +3,6 @@ import UIKit
 enum IPodNowPlayingBarMode {
     case duration
     case lyrics
-    case sleepTimer
 }
 
 enum IPodColorTheme: CaseIterable {
@@ -457,246 +456,6 @@ final class IPodDownloadStatusButton: UIControl {
     }
 }
 
-final class IPodSleepTimerFocusView: UIView {
-    var onMinutesChanged: ((Int, Bool) -> Void)?
-
-    private let dialContainer = UIView()
-    private let ticksLayer = CAShapeLayer()
-    private let trackLayer = CAShapeLayer()
-    private let arcLayer = CAShapeLayer()
-    private let timerIconView = UIImageView()
-    private let timeLabel = UILabel()
-
-    private var currentTheme: IPodColorTheme = .darkPod
-    private var currentSetMinutes: Int = 0
-    private var currentElapsedSeconds: Int = 0
-    private var currentIsActive: Bool = false
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .clear
-        setupUI()
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func setupUI() {
-        dialContainer.backgroundColor = .clear
-        dialContainer.translatesAutoresizingMaskIntoConstraints = false
-        let dialPan = UIPanGestureRecognizer(target: self, action: #selector(handleDialPan(_:)))
-        dialContainer.addGestureRecognizer(dialPan)
-        addSubview(dialContainer)
-
-        ticksLayer.fillColor = UIColor.clear.cgColor
-        ticksLayer.lineCap = .round
-        dialContainer.layer.addSublayer(ticksLayer)
-
-        trackLayer.fillColor = UIColor.clear.cgColor
-        trackLayer.lineWidth = 6.5
-        dialContainer.layer.addSublayer(trackLayer)
-
-        arcLayer.fillColor = UIColor.clear.cgColor
-        arcLayer.lineWidth = 6.5
-        arcLayer.lineCap = .round
-        arcLayer.strokeStart = 0.0
-        arcLayer.strokeEnd = 0.0
-        dialContainer.layer.addSublayer(arcLayer)
-
-        timerIconView.image = makeCircularTimerIcon(size: CGSize(width: 40, height: 40))
-        timerIconView.contentMode = .scaleAspectFit
-        timerIconView.isUserInteractionEnabled = false
-        timerIconView.translatesAutoresizingMaskIntoConstraints = false
-        dialContainer.addSubview(timerIconView)
-
-        timeLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 28.0, weight: .bold)
-        timeLabel.textAlignment = .center
-        timeLabel.adjustsFontSizeToFitWidth = true
-        timeLabel.minimumScaleFactor = 0.78
-        timeLabel.isUserInteractionEnabled = false
-        timeLabel.translatesAutoresizingMaskIntoConstraints = false
-        dialContainer.addSubview(timeLabel)
-
-        NSLayoutConstraint.activate([
-            dialContainer.centerXAnchor.constraint(equalTo: centerXAnchor),
-            dialContainer.centerYAnchor.constraint(equalTo: centerYAnchor),
-            dialContainer.widthAnchor.constraint(equalToConstant: 164),
-            dialContainer.heightAnchor.constraint(equalToConstant: 164),
-
-            timerIconView.centerXAnchor.constraint(equalTo: dialContainer.centerXAnchor),
-            timerIconView.centerYAnchor.constraint(equalTo: dialContainer.centerYAnchor),
-            timerIconView.widthAnchor.constraint(equalToConstant: 40),
-            timerIconView.heightAnchor.constraint(equalToConstant: 40),
-
-            timeLabel.centerXAnchor.constraint(equalTo: dialContainer.centerXAnchor),
-            timeLabel.centerYAnchor.constraint(equalTo: dialContainer.centerYAnchor),
-            timeLabel.leadingAnchor.constraint(equalTo: dialContainer.leadingAnchor, constant: 22),
-            timeLabel.trailingAnchor.constraint(equalTo: dialContainer.trailingAnchor, constant: -22)
-        ])
-
-        renderState(previousSetMinutes: 0)
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let b = dialContainer.bounds
-        guard b.width > 20 && b.height > 20 else { return }
-
-        let center = CGPoint(x: b.midX, y: b.midY)
-        let outerR = min(b.width, b.height) / 2.0 - 2.0
-        let ringR = outerR - 9.5
-
-        let ticksPath = UIBezierPath()
-        for i in 0..<60 {
-            let angle = (CGFloat(i) / 60.0) * 2.0 * .pi - .pi / 2.0
-            let isMajor = (i % 5 == 0)
-            let innerR = outerR - (isMajor ? 5.8 : 3.2)
-            ticksPath.move(to: CGPoint(x: center.x + cos(angle) * innerR, y: center.y + sin(angle) * innerR))
-            ticksPath.addLine(to: CGPoint(x: center.x + cos(angle) * outerR, y: center.y + sin(angle) * outerR))
-        }
-        ticksLayer.frame = b
-        ticksLayer.lineWidth = 1.15
-        ticksLayer.path = ticksPath.cgPath
-
-        let arcPath = UIBezierPath(
-            arcCenter: center,
-            radius: ringR,
-            startAngle: -.pi / 2.0,
-            endAngle: 1.5 * .pi,
-            clockwise: true
-        ).cgPath
-        trackLayer.frame = b
-        trackLayer.path = arcPath
-        arcLayer.frame = b
-        arcLayer.path = arcPath
-    }
-
-    @objc private func handleDialPan(_ gesture: UIPanGestureRecognizer) {
-        let pt = gesture.location(in: dialContainer)
-        let center = CGPoint(x: dialContainer.bounds.midX, y: dialContainer.bounds.midY)
-        let dx = pt.x - center.x
-        let dy = pt.y - center.y
-        guard hypot(dx, dy) >= 12.0 else { return }
-
-        var angle = atan2(dy, dx) + .pi / 2.0
-        if angle < 0 { angle += 2.0 * .pi }
-        let ratio = min(max(Double(angle / (2.0 * .pi)), 0.0), 1.0)
-        let mins = Int(round(ratio * 60.0))
-
-        switch gesture.state {
-        case .began, .changed:
-            onMinutesChanged?(mins, false)
-        case .ended, .cancelled:
-            onMinutesChanged?(mins, true)
-        default:
-            break
-        }
-    }
-
-    func applyTheme(_ theme: IPodColorTheme) {
-        currentTheme = theme
-        renderState(previousSetMinutes: currentSetMinutes)
-    }
-
-    func update(setMinutes: Int, elapsedSeconds: Int, isActive: Bool) {
-        let prevMinutes = currentSetMinutes
-        currentSetMinutes = setMinutes
-        currentElapsedSeconds = elapsedSeconds
-        currentIsActive = isActive
-        renderState(previousSetMinutes: prevMinutes)
-    }
-
-    private func formatMMSS(_ sec: Int) -> String {
-        let clamped = max(0, sec)
-        return String(format: "%d:%02d", clamped / 60, clamped % 60)
-    }
-
-    private func renderState(previousSetMinutes: Int) {
-        ticksLayer.strokeColor = currentTheme.secondaryText.withAlphaComponent(0.32).cgColor
-        trackLayer.strokeColor = (currentTheme == .darkPod
-            ? UIColor(white: 1.0, alpha: 0.12)
-            : UIColor(white: 0.0, alpha: 0.09)).cgColor
-        arcLayer.strokeColor = currentTheme.highlightTop.cgColor
-        timerIconView.tintColor = currentTheme.secondaryText
-
-        if currentTheme == .darkPod {
-            arcLayer.shadowColor = currentTheme.highlightTop.cgColor
-            arcLayer.shadowRadius = 6.0
-            arcLayer.shadowOpacity = (currentSetMinutes > 0) ? 0.55 : 0.0
-            arcLayer.shadowOffset = .zero
-        } else {
-            arcLayer.shadowOpacity = 0.0
-        }
-
-        let totalSec = max(0, currentSetMinutes * 60)
-        let progressRatio: CGFloat
-        if currentIsActive && currentSetMinutes > 0 {
-            let clampedElapsed = min(max(0, currentElapsedSeconds), totalSec)
-            let remaining = max(0, totalSec - clampedElapsed)
-            timerIconView.isHidden = true
-            timeLabel.isHidden = false
-            timeLabel.text = formatMMSS(remaining)
-            timeLabel.textColor = currentTheme.highlightTop
-            // Start countdown directly from the configured point on the 60-minute dial
-            progressRatio = CGFloat(remaining) / 3600.0
-        } else if currentSetMinutes > 0 {
-            timerIconView.isHidden = true
-            timeLabel.isHidden = false
-            timeLabel.text = formatMMSS(totalSec)
-            timeLabel.textColor = currentTheme.primaryText
-            progressRatio = CGFloat(currentSetMinutes) / 60.0
-        } else {
-            timerIconView.isHidden = false
-            timeLabel.isHidden = true
-            progressRatio = 0.0
-        }
-
-        let isResettingToOff = (previousSetMinutes > 0 && currentSetMinutes == 0 && !currentIsActive)
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(isResettingToOff ? 0.42 : (currentIsActive ? 0.28 : 0.14))
-        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
-        arcLayer.strokeEnd = min(max(progressRatio, 0.0), 1.0)
-        CATransaction.commit()
-    }
-
-    private func makeCircularTimerIcon(size: CGSize) -> UIImage? {
-        UIGraphicsBeginImageContextWithOptions(size, false, 0)
-        defer { UIGraphicsEndImageContext() }
-        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
-
-        ctx.setStrokeColor(UIColor.white.cgColor)
-        ctx.setLineCap(.round)
-        ctx.setLineJoin(.round)
-
-        let w = size.width
-        let h = size.height
-        let center = CGPoint(x: w / 2.0, y: h / 2.0 + 2.0)
-        let r: CGFloat = min(w, h) * 0.34
-
-        // Top stopwatch crown button & stem
-        ctx.setLineWidth(2.2)
-        ctx.move(to: CGPoint(x: center.x - 4.0, y: center.y - r - 5.0))
-        ctx.addLine(to: CGPoint(x: center.x + 4.0, y: center.y - r - 5.0))
-        ctx.move(to: CGPoint(x: center.x, y: center.y - r - 5.0))
-        ctx.addLine(to: CGPoint(x: center.x, y: center.y - r - 1.0))
-        ctx.strokePath()
-
-        // Main circular bezel
-        ctx.setLineWidth(2.3)
-        ctx.addEllipse(in: CGRect(x: center.x - r, y: center.y - r, width: r * 2.0, height: r * 2.0))
-        ctx.strokePath()
-
-        // Timer hands inside circle (12 o'clock + angled hand)
-        ctx.setLineWidth(2.2)
-        ctx.move(to: center)
-        ctx.addLine(to: CGPoint(x: center.x, y: center.y - r * 0.56))
-        ctx.move(to: center)
-        ctx.addLine(to: CGPoint(x: center.x + r * 0.42, y: center.y + r * 0.22))
-        ctx.strokePath()
-
-        return UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
-    }
-}
-
 class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
     var theme: IPodColorTheme = .darkPod {
         didSet { applyTheme() }
@@ -709,12 +468,13 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     var onStreamingSearchTapped: (() -> Void)?
     var onDownloadButtonTapped: (() -> Void)?
     var onArtworkDoubleTapped: (() -> Void)?
-    var onSleepTimerMinutesChanged: ((Int, Bool) -> Void)?
 
     // Modern Seamless Status Bar
     private let headerBar = UIView()
     private let headerSubtleTint = CAGradientLayer()
     private let headerTitleLabel = UILabel()
+    private var nonTimerHeaderTitle: String = "iPod"
+    private var isSleepTimerHeaderActive: Bool = false
     private let clockLabel = UILabel()
     private let playStateIcon = UILabel()
     private let batteryView = UIView()
@@ -811,7 +571,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private let progressKnob = UIView()
     private let elapsedLabel = UILabel()
     private let remainingLabel = UILabel()
-    private let sleepTimerFocusView = IPodSleepTimerFocusView()
     private var progressWidthConstraint: NSLayoutConstraint!
     private var isScrubbing = false
     private(set) var barMode: IPodNowPlayingBarMode = .duration
@@ -1067,14 +826,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         remainingLabel.translatesAutoresizingMaskIntoConstraints = false
         nowPlayingContainer.addSubview(remainingLabel)
 
-        sleepTimerFocusView.isHidden = true
-        sleepTimerFocusView.alpha = 0.0
-        sleepTimerFocusView.translatesAutoresizingMaskIntoConstraints = false
-        sleepTimerFocusView.onMinutesChanged = { [weak self] mins, isFinished in
-            self?.onSleepTimerMinutesChanged?(mins, isFinished)
-        }
-        nowPlayingContainer.addSubview(sleepTimerFocusView)
-
         progressTouchArea.backgroundColor = .clear
         progressTouchArea.isUserInteractionEnabled = true
         progressTouchArea.translatesAutoresizingMaskIntoConstraints = false
@@ -1276,11 +1027,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             remainingLabel.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -18),
             remainingLabel.centerYAnchor.constraint(equalTo: elapsedLabel.centerYAnchor),
             remainingLabel.widthAnchor.constraint(equalToConstant: 40),
-
-            sleepTimerFocusView.topAnchor.constraint(equalTo: nowPlayingContainer.topAnchor),
-            sleepTimerFocusView.bottomAnchor.constraint(equalTo: nowPlayingContainer.bottomAnchor),
-            sleepTimerFocusView.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor),
-            sleepTimerFocusView.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor),
 
             progressTouchArea.leadingAnchor.constraint(equalTo: nowPlayingContainer.leadingAnchor, constant: 66),
             progressTouchArea.trailingAnchor.constraint(equalTo: nowPlayingContainer.trailingAnchor, constant: -66),
@@ -1601,7 +1347,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         trackArtistLabel.textColor = theme.secondaryText
         elapsedLabel.textColor = theme.secondaryText
         remainingLabel.textColor = theme.secondaryText
-        sleepTimerFocusView.applyTheme(theme)
         progressTrack.backgroundColor = theme == .darkPod ? UIColor(white: 0.28, alpha: 1.0) : UIColor(white: 0.78, alpha: 1.0)
         progressFill.backgroundColor = theme == .darkPod ? .white : theme.highlightTop
         progressKnob.backgroundColor = theme == .darkPod ? .white : theme.highlightBottom
@@ -1647,7 +1392,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         stopSmoothScrollDisplayLink()
         coverLoadingSpinner.stopAnimating()
         coverLoadingStack.isHidden = true
-        headerTitleLabel.text = title
+        setBaseHeaderTitle(title)
         self.rows = items
         self.selectedIndex = min(max(0, selectedIndex), max(0, items.count - 1))
         self.isModernSettingsMenu = isModernSettings
@@ -1677,7 +1422,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     func showCoverFlowLoading(title: String) {
         stopSmoothScrollDisplayLink()
-        headerTitleLabel.text = title
+        setBaseHeaderTitle(title)
         coverTracks = []
         coverItems = []
         hasLeadingSearch = false
@@ -1704,7 +1449,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     func showCoverFlowNoInternet(title: String) {
         stopSmoothScrollDisplayLink()
-        headerTitleLabel.text = title
+        setBaseHeaderTitle(title)
         coverTracks = []
         coverItems = []
         hasLeadingSearch = false
@@ -1745,7 +1490,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         let sourceArtworkFrame = artworkView.convert(artworkView.bounds, to: self)
         let sourceArtworkImage = artworkView.image
 
-        headerTitleLabel.text = title
+        setBaseHeaderTitle(title)
         self.coverTracks = tracks
         self.hasLeadingSearch = showStreamingRefresh
         self.activeSearchQuery = searchQuery
@@ -2023,7 +1768,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         stopSmoothScrollDisplayLink()
         coverLoadingSpinner.stopAnimating()
         coverLoadingStack.isHidden = true
-        headerTitleLabel.text = headerTitle(for: barMode)
+        setBaseHeaderTitle(headerTitle(for: barMode))
         tableView.isHidden = true
         coverFlowContainer.isHidden = true
         isCoverFlowActive = false
@@ -2035,16 +1780,14 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         trackIndexLabel.text = "\(index + 1) of \(total)"
 
         let isLyricsMode = (barMode == .lyrics)
-        let isTimerMode = (barMode == .sleepTimer)
         applyLyricsLayout(active: isLyricsMode, animated: false)
-        applySleepTimerLayout(active: isTimerMode, animated: false)
 
         let nextImage = track.artworkImage ?? makeDefaultNoteArtwork()
         artworkView.image = nextImage
         artworkReflectionView.image = nextImage
         onActiveCoverImageChanged?(track.artworkImage)
 
-        let targetReflectionAlpha: CGFloat = isTimerMode ? 0.0 : (isLyricsMode ? 0.18 : 0.28)
+        let targetReflectionAlpha: CGFloat = isLyricsMode ? 0.18 : 0.28
 
         if animateFromCoverFlow && wasCoverFlow {
             layoutIfNeeded()
@@ -2075,17 +1818,17 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
                 animations: {
                     flyingCover.frame = exactTargetFrame
                     self.artworkReflectionView.alpha = targetReflectionAlpha
-                    self.trackTitleLabel.alpha = isTimerMode ? 0.0 : 1.0
-                    self.trackIndexLabel.alpha = (isLyricsMode || isTimerMode) ? 0.0 : 1.0
-                    self.downloadStatusButton.alpha = (isLyricsMode || isTimerMode || !self.isCurrentTrackStreaming) ? 0.0 : 1.0
-                    self.trackArtistLabel.alpha = (isLyricsMode || isTimerMode) ? 0.0 : 1.0
+                    self.trackTitleLabel.alpha = 1.0
+                    self.trackIndexLabel.alpha = isLyricsMode ? 0.0 : 1.0
+                    self.downloadStatusButton.alpha = (isLyricsMode || !self.isCurrentTrackStreaming) ? 0.0 : 1.0
+                    self.trackArtistLabel.alpha = isLyricsMode ? 0.0 : 1.0
                     self.lyricsContainerView.alpha = isLyricsMode ? 1.0 : 0.0
-                    self.progressTouchArea.alpha = isTimerMode ? 0.0 : 1.0
-                    self.elapsedLabel.alpha = isTimerMode ? 0.0 : 1.0
-                    self.remainingLabel.alpha = isTimerMode ? 0.0 : 1.0
+                    self.progressTouchArea.alpha = 1.0
+                    self.elapsedLabel.alpha = 1.0
+                    self.remainingLabel.alpha = 1.0
                 },
                 completion: { _ in
-                    self.artworkView.alpha = isTimerMode ? 0.0 : 1.0
+                    self.artworkView.alpha = 1.0
                     flyingCover.removeFromSuperview()
                 }
             )
@@ -2093,7 +1836,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             return
         }
 
-        if transitionDirection != 0 && lastDisplayedTrackId != track.id && !isTimerMode {
+        if transitionDirection != 0 && lastDisplayedTrackId != track.id {
             let dir: CGFloat = transitionDirection > 0 ? 1.0 : -1.0
             var startTransform = CATransform3DIdentity
             startTransform.m34 = -1.0 / 350.0
@@ -2112,41 +1855,63 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             })
         } else {
             artworkView.layer.transform = CATransform3DIdentity
-            artworkView.alpha = isTimerMode ? 0.0 : 1.0
+            artworkView.alpha = 1.0
             artworkReflectionView.alpha = targetReflectionAlpha
         }
 
         lastDisplayedTrackId = track.id
     }
 
-    private func headerTitle(for mode: IPodNowPlayingBarMode) -> String {
-        switch mode {
-        case .duration:   return "Now Playing"
-        case .lyrics:     return "Lyrics"
-        case .sleepTimer: return "Sleep Time"
+    private func setBaseHeaderTitle(_ title: String, animated: Bool = false) {
+        nonTimerHeaderTitle = title
+        guard !isSleepTimerHeaderActive else { return }
+        if animated {
+            UIView.transition(
+                with: headerTitleLabel,
+                duration: 0.22,
+                options: [.transitionCrossDissolve, .beginFromCurrentState]
+            ) {
+                self.headerTitleLabel.text = title
+            }
+        } else {
+            headerTitleLabel.text = title
         }
     }
 
-    func setNowPlayingBarMode(
-        _ mode: IPodNowPlayingBarMode,
-        sleepSetMinutes: Int,
-        sleepElapsedSeconds: Int,
-        isSleepActive: Bool
-    ) {
+    func setSleepTimerHeaderActive(_ active: Bool, animated: Bool = true) {
+        let targetText = active ? "Sleep Time" : nonTimerHeaderTitle
+        isSleepTimerHeaderActive = active
+        guard headerTitleLabel.text != targetText else { return }
+        if animated {
+            UIView.transition(
+                with: headerTitleLabel,
+                duration: 0.22,
+                options: [.transitionCrossDissolve, .beginFromCurrentState]
+            ) {
+                self.headerTitleLabel.text = targetText
+            }
+        } else {
+            headerTitleLabel.text = targetText
+        }
+    }
+
+    private func headerTitle(for mode: IPodNowPlayingBarMode) -> String {
+        switch mode {
+        case .duration: return "Now Playing"
+        case .lyrics:   return "Lyrics"
+        }
+    }
+
+    func setNowPlayingBarMode(_ mode: IPodNowPlayingBarMode) {
         let wasLyrics = (barMode == .lyrics)
-        let wasTimer = (barMode == .sleepTimer)
         let isLyrics = (mode == .lyrics)
-        let isTimer = (mode == .sleepTimer)
         barMode = mode
         if !nowPlayingContainer.isHidden {
-            headerTitleLabel.text = headerTitle(for: mode)
+            setBaseHeaderTitle(headerTitle(for: mode), animated: !isSleepTimerHeaderActive)
         }
 
-        if wasLyrics != isLyrics && !isTimer {
+        if wasLyrics != isLyrics {
             applyLyricsLayout(active: isLyrics, animated: !nowPlayingContainer.isHidden)
-        }
-        if wasTimer != isTimer {
-            applySleepTimerLayout(active: isTimer, wasLyrics: wasLyrics, animated: !nowPlayingContainer.isHidden)
         }
 
         switch mode {
@@ -2155,184 +1920,8 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         case .lyrics:
             updateProgress(elapsed: lastElapsed, duration: lastDuration)
             renderLyricSlots(animatedDirection: 0)
-        case .sleepTimer:
-            updateSleepTimerDisplay(
-                setMinutes: sleepSetMinutes,
-                elapsedSeconds: sleepElapsedSeconds,
-                isActive: isSleepActive
-            )
         }
         updateLyricsDisplayLinkState()
-    }
-
-    private func applySleepTimerLayout(active: Bool, wasLyrics: Bool = false, animated: Bool) {
-        let isLyricsMode = (barMode == .lyrics)
-        nowPlayingContainer.bringSubviewToFront(sleepTimerFocusView)
-
-        if active {
-            sleepTimerFocusView.isHidden = false
-            if animated {
-                sleepTimerFocusView.alpha = 0.0
-                sleepTimerFocusView.transform = CGAffineTransform(scaleX: 0.88, y: 0.88)
-
-                // Phase 1: Cleanly dissolve current view (preserving lyrics layout in-place so nothing snaps)
-                UIView.animate(
-                    withDuration: 0.24,
-                    delay: 0,
-                    options: [.curveEaseInOut, .beginFromCurrentState],
-                    animations: {
-                        self.artworkView.alpha = 0.0
-                        self.artworkView.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
-                        self.artworkReflectionView.alpha = 0.0
-                        self.trackTitleLabel.alpha = 0.0
-                        self.trackArtistLabel.alpha = 0.0
-                        self.trackIndexLabel.alpha = 0.0
-                        self.downloadStatusButton.alpha = 0.0
-                        self.lyricsContainerView.alpha = 0.0
-                        self.lyricsContainerView.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
-                        self.progressTouchArea.alpha = 0.0
-                        self.elapsedLabel.alpha = 0.0
-                        self.remainingLabel.alpha = 0.0
-                    },
-                    completion: { _ in
-                        self.artworkView.transform = .identity
-                        self.lyricsContainerView.transform = .identity
-                        if self.barMode == .sleepTimer {
-                            if wasLyrics {
-                                self.applyLyricsLayout(active: false, animated: false)
-                            }
-                            self.artworkView.isHidden = true
-                            self.artworkReflectionView.isHidden = true
-                            self.trackTitleLabel.isHidden = true
-                            self.trackArtistLabel.isHidden = true
-                            self.trackIndexLabel.isHidden = true
-                            self.downloadStatusButton.isHidden = true
-                            self.lyricsContainerView.isHidden = true
-                            self.progressTouchArea.isHidden = true
-                            self.elapsedLabel.isHidden = true
-                            self.remainingLabel.isHidden = true
-                        }
-                    }
-                )
-
-                // Phase 2: Smoothly bloom Sleep Timer dial into center
-                UIView.animate(
-                    withDuration: 0.42,
-                    delay: 0.14,
-                    usingSpringWithDamping: 0.88,
-                    initialSpringVelocity: 0.12,
-                    options: [.curveEaseOut, .beginFromCurrentState],
-                    animations: {
-                        guard self.barMode == .sleepTimer else { return }
-                        self.sleepTimerFocusView.alpha = 1.0
-                        self.sleepTimerFocusView.transform = .identity
-                    }
-                )
-            } else {
-                if wasLyrics {
-                    applyLyricsLayout(active: false, animated: false)
-                }
-                artworkView.isHidden = true
-                artworkView.alpha = 0.0
-                artworkReflectionView.isHidden = true
-                artworkReflectionView.alpha = 0.0
-                trackTitleLabel.isHidden = true
-                trackTitleLabel.alpha = 0.0
-                trackArtistLabel.isHidden = true
-                trackArtistLabel.alpha = 0.0
-                trackIndexLabel.isHidden = true
-                trackIndexLabel.alpha = 0.0
-                downloadStatusButton.isHidden = true
-                downloadStatusButton.alpha = 0.0
-                lyricsContainerView.isHidden = true
-                lyricsContainerView.alpha = 0.0
-                progressTouchArea.isHidden = true
-                progressTouchArea.alpha = 0.0
-                elapsedLabel.isHidden = true
-                elapsedLabel.alpha = 0.0
-                remainingLabel.isHidden = true
-                remainingLabel.alpha = 0.0
-                sleepTimerFocusView.alpha = 1.0
-                sleepTimerFocusView.transform = .identity
-            }
-        } else {
-            if !isLyricsMode && trackTitleLabel.textAlignment == .center {
-                applyLyricsLayout(active: false, animated: false)
-            }
-            artworkView.isHidden = false
-            artworkReflectionView.isHidden = false
-            trackTitleLabel.isHidden = false
-            trackArtistLabel.isHidden = isLyricsMode
-            trackIndexLabel.isHidden = isLyricsMode
-            downloadStatusButton.isHidden = isLyricsMode || !isCurrentTrackStreaming
-            lyricsContainerView.isHidden = !isLyricsMode
-            progressTouchArea.isHidden = false
-            elapsedLabel.isHidden = false
-            remainingLabel.isHidden = false
-
-            if animated {
-                artworkView.alpha = 0.0
-                artworkReflectionView.alpha = 0.0
-                trackTitleLabel.alpha = 0.0
-                trackArtistLabel.alpha = 0.0
-                trackIndexLabel.alpha = 0.0
-                downloadStatusButton.alpha = 0.0
-                progressTouchArea.alpha = 0.0
-                elapsedLabel.alpha = 0.0
-                remainingLabel.alpha = 0.0
-                artworkView.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
-                UIView.animate(
-                    withDuration: 0.22,
-                    delay: 0,
-                    options: [.curveEaseIn, .beginFromCurrentState],
-                    animations: {
-                        self.sleepTimerFocusView.alpha = 0.0
-                        self.sleepTimerFocusView.transform = CGAffineTransform(scaleX: 0.88, y: 0.88)
-                    },
-                    completion: { _ in
-                        if self.barMode != .sleepTimer {
-                            self.sleepTimerFocusView.isHidden = true
-                            self.sleepTimerFocusView.transform = .identity
-                        }
-                    }
-                )
-
-                UIView.animate(
-                    withDuration: 0.36,
-                    delay: 0.12,
-                    options: [.curveEaseOut, .beginFromCurrentState],
-                    animations: {
-                        guard self.barMode != .sleepTimer else { return }
-                        self.artworkView.alpha = 1.0
-                        self.artworkView.transform = .identity
-                        self.artworkReflectionView.alpha = isLyricsMode ? 0.18 : 0.28
-                        self.trackTitleLabel.alpha = 1.0
-                        self.trackArtistLabel.alpha = isLyricsMode ? 0.0 : 1.0
-                        self.trackIndexLabel.alpha = isLyricsMode ? 0.0 : 1.0
-                        self.downloadStatusButton.alpha = (isLyricsMode || !self.isCurrentTrackStreaming) ? 0.0 : 1.0
-                        self.lyricsContainerView.alpha = isLyricsMode ? 1.0 : 0.0
-                        self.progressTouchArea.alpha = 1.0
-                        self.elapsedLabel.alpha = 1.0
-                        self.remainingLabel.alpha = 1.0
-                    }
-                )
-            } else {
-                sleepTimerFocusView.isHidden = true
-                sleepTimerFocusView.alpha = 0.0
-                sleepTimerFocusView.transform = .identity
-                artworkView.alpha = 1.0
-                artworkView.transform = .identity
-                artworkReflectionView.alpha = isLyricsMode ? 0.18 : 0.28
-                trackTitleLabel.alpha = 1.0
-                trackArtistLabel.alpha = isLyricsMode ? 0.0 : 1.0
-                trackIndexLabel.alpha = isLyricsMode ? 0.0 : 1.0
-                downloadStatusButton.alpha = (isLyricsMode || !isCurrentTrackStreaming) ? 0.0 : 1.0
-                lyricsContainerView.alpha = isLyricsMode ? 1.0 : 0.0
-                progressTouchArea.alpha = 1.0
-                elapsedLabel.alpha = 1.0
-                remainingLabel.alpha = 1.0
-            }
-        }
     }
 
     // MARK: - Lyrics Layout & Sync Engine
@@ -3216,7 +2805,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         }
         downloadStatusButton.applyTheme(theme)
         downloadStatusButton.setState(state ?? .notDownloaded)
-        let shouldHide = (barMode == .lyrics || barMode == .sleepTimer)
+        let shouldHide = (barMode == .lyrics)
         downloadStatusButton.isHidden = shouldHide
         downloadStatusButton.alpha = shouldHide ? 0.0 : 1.0
     }
@@ -3228,10 +2817,6 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     @objc private func handleArtworkDoubleTap() {
         guard !nowPlayingContainer.isHidden else { return }
         onArtworkDoubleTapped?()
-    }
-
-    func updateSleepTimerDisplay(setMinutes: Int, elapsedSeconds: Int, isActive: Bool) {
-        sleepTimerFocusView.update(setMinutes: setMinutes, elapsedSeconds: elapsedSeconds, isActive: isActive)
     }
 
     func updateProgress(elapsed: TimeInterval, duration: TimeInterval, fromScrub: Bool = false) {

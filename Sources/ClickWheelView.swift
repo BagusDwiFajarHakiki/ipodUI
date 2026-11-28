@@ -5,6 +5,7 @@ protocol ClickWheelDelegate: AnyObject {
     func clickWheelDidScroll(steps: Int)
     func clickWheelDidPressMenu()
     func clickWheelDidPressSelect()
+    func clickWheelDidLongPressSelect()
     func clickWheelDidPressPlayPause()
     func clickWheelDidPressNext()
     func clickWheelDidPressPrevious()
@@ -14,11 +15,32 @@ class ClickWheelView: UIView {
     weak var delegate: ClickWheelDelegate?
 
     private let wheelLayer = CAShapeLayer()
+    private let timerRingContainerLayer = CALayer()
+    private let timerTicksLayer = CAShapeLayer()
+    private let timerTrackLayer = CAShapeLayer()
+    private let timerArcLayer = CAShapeLayer()
+
     private let centerButton = UIButton(type: .custom)
+    private let timerCenterContainer = UIView()
+    private let timerIconView = UIImageView()
+    private let timerTimeLabel = UILabel()
+    private var timerIconCenterYConstraint: NSLayoutConstraint!
+    private var timerIconWidthConstraint: NSLayoutConstraint!
+    private var timerIconHeightConstraint: NSLayoutConstraint!
+
     private let menuLabel = UILabel()
     private let nextIconView = UIImageView()
     private let prevIconView = UIImageView()
     private let playPauseIconView = UIImageView()
+
+    private var currentTheme: IPodColorTheme = .darkPod
+    private var sleepSetMinutes: Int = 0
+    private var sleepElapsedSeconds: Int = 0
+    private var isSleepTimerActive: Bool = false
+    private var isTimerEditingMode: Bool = false
+    private var isTimerOverlayVisible: Bool = false
+    private var timerOverlayToken: Int = 0
+    private var didTriggerCenterLongPress = false
 
     private var lastAngle: CGFloat?
     private var accumulatedAngle: CGFloat = 0
@@ -43,6 +65,25 @@ class ClickWheelView: UIView {
         wheelLayer.shadowRadius = 8
         layer.addSublayer(wheelLayer)
 
+        timerRingContainerLayer.isHidden = true
+        timerRingContainerLayer.opacity = 0.0
+        layer.addSublayer(timerRingContainerLayer)
+
+        timerTicksLayer.fillColor = UIColor.clear.cgColor
+        timerTicksLayer.lineCap = .round
+        timerRingContainerLayer.addSublayer(timerTicksLayer)
+
+        timerTrackLayer.fillColor = UIColor.clear.cgColor
+        timerTrackLayer.lineWidth = 4.5
+        timerRingContainerLayer.addSublayer(timerTrackLayer)
+
+        timerArcLayer.fillColor = UIColor.clear.cgColor
+        timerArcLayer.lineWidth = 4.5
+        timerArcLayer.lineCap = .round
+        timerArcLayer.strokeStart = 0.0
+        timerArcLayer.strokeEnd = 0.0
+        timerRingContainerLayer.addSublayer(timerArcLayer)
+
         menuLabel.text = "MENU"
         menuLabel.font = UIFont.systemFont(ofSize: 13.5, weight: .heavy)
         menuLabel.textAlignment = .center
@@ -62,11 +103,59 @@ class ClickWheelView: UIView {
 
         centerButton.layer.borderWidth = 0
         centerButton.layer.borderColor = nil
+        centerButton.addTarget(self, action: #selector(didTouchDownCenter), for: .touchDown)
         centerButton.addTarget(self, action: #selector(didTapCenter), for: .touchUpInside)
+        let centerLongPress = UILongPressGestureRecognizer(target: self, action: #selector(handleCenterLongPress(_:)))
+        centerLongPress.minimumPressDuration = 0.42
+        centerLongPress.allowableMovement = 16
+        centerButton.addGestureRecognizer(centerLongPress)
         addSubview(centerButton)
+
+        timerCenterContainer.isUserInteractionEnabled = false
+        timerCenterContainer.isHidden = true
+        timerCenterContainer.alpha = 0.0
+        timerCenterContainer.translatesAutoresizingMaskIntoConstraints = false
+        centerButton.addSubview(timerCenterContainer)
+
+        timerIconView.image = makeCircularTimerIcon(size: CGSize(width: 34, height: 34))
+        timerIconView.contentMode = .scaleAspectFit
+        timerIconView.isUserInteractionEnabled = false
+        timerIconView.translatesAutoresizingMaskIntoConstraints = false
+        timerCenterContainer.addSubview(timerIconView)
+
+        timerTimeLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 19.0, weight: .bold)
+        timerTimeLabel.textAlignment = .center
+        timerTimeLabel.adjustsFontSizeToFitWidth = true
+        timerTimeLabel.minimumScaleFactor = 0.65
+        timerTimeLabel.isUserInteractionEnabled = false
+        timerTimeLabel.alpha = 0.0
+        timerTimeLabel.translatesAutoresizingMaskIntoConstraints = false
+        timerCenterContainer.addSubview(timerTimeLabel)
+
+        timerIconCenterYConstraint = timerIconView.centerYAnchor.constraint(equalTo: timerCenterContainer.centerYAnchor)
+        timerIconWidthConstraint = timerIconView.widthAnchor.constraint(equalToConstant: 32)
+        timerIconHeightConstraint = timerIconView.heightAnchor.constraint(equalToConstant: 32)
+
+        NSLayoutConstraint.activate([
+            timerCenterContainer.topAnchor.constraint(equalTo: centerButton.topAnchor),
+            timerCenterContainer.bottomAnchor.constraint(equalTo: centerButton.bottomAnchor),
+            timerCenterContainer.leadingAnchor.constraint(equalTo: centerButton.leadingAnchor),
+            timerCenterContainer.trailingAnchor.constraint(equalTo: centerButton.trailingAnchor),
+
+            timerIconView.centerXAnchor.constraint(equalTo: timerCenterContainer.centerXAnchor),
+            timerIconCenterYConstraint,
+            timerIconWidthConstraint,
+            timerIconHeightConstraint,
+
+            timerTimeLabel.centerXAnchor.constraint(equalTo: timerCenterContainer.centerXAnchor),
+            timerTimeLabel.centerYAnchor.constraint(equalTo: timerCenterContainer.centerYAnchor, constant: 9),
+            timerTimeLabel.leadingAnchor.constraint(equalTo: timerCenterContainer.leadingAnchor, constant: 8),
+            timerTimeLabel.trailingAnchor.constraint(equalTo: timerCenterContainer.trailingAnchor, constant: -8)
+        ])
     }
 
     func applyTheme(_ theme: IPodColorTheme) {
+        currentTheme = theme
         let iconTint: UIColor
         switch theme {
         case .darkPod:
@@ -89,6 +178,240 @@ class ClickWheelView: UIView {
         nextIconView.tintColor = iconTint
         prevIconView.tintColor = iconTint
         playPauseIconView.tintColor = iconTint
+        renderSleepTimer(previousSetMinutes: sleepSetMinutes, animated: false)
+    }
+
+    func updateSleepTimer(setMinutes: Int, elapsedSeconds: Int, isActive: Bool, isEditing: Bool) {
+        let prevMinutes = sleepSetMinutes
+        sleepSetMinutes = setMinutes
+        sleepElapsedSeconds = elapsedSeconds
+        isSleepTimerActive = isActive
+        isTimerEditingMode = isEditing
+        renderSleepTimer(previousSetMinutes: prevMinutes, animated: true)
+    }
+
+    private func centerButtonTextColor() -> UIColor {
+        switch currentTheme {
+        case .darkPod:     return UIColor(white: 0.94, alpha: 1.0)
+        case .sepiaPod:    return UIColor(red: 0.28, green: 0.19, blue: 0.11, alpha: 1.0)
+        case .classicBlue: return UIColor(white: 0.16, alpha: 1.0)
+        }
+    }
+
+    private func centerButtonIconTintColor() -> UIColor {
+        switch currentTheme {
+        case .darkPod:     return UIColor(white: 0.78, alpha: 1.0)
+        case .sepiaPod:    return UIColor(red: 0.42, green: 0.31, blue: 0.20, alpha: 1.0)
+        case .classicBlue: return UIColor(white: 0.34, alpha: 1.0)
+        }
+    }
+
+    private func formatMMSS(_ sec: Int) -> String {
+        let clamped = max(0, sec)
+        return String(format: "%d:%02d", clamped / 60, clamped % 60)
+    }
+
+    private func renderSleepTimer(previousSetMinutes: Int, animated: Bool) {
+        let accent = currentTheme.highlightTop
+        timerTicksLayer.strokeColor = centerButtonIconTintColor().withAlphaComponent(0.32).cgColor
+        timerTrackLayer.strokeColor = (currentTheme == .darkPod
+            ? UIColor(white: 1.0, alpha: 0.14)
+            : UIColor(white: 0.0, alpha: 0.11)).cgColor
+        timerArcLayer.strokeColor = accent.cgColor
+
+        if currentTheme == .darkPod {
+            timerArcLayer.shadowColor = accent.cgColor
+            timerArcLayer.shadowRadius = 6.0
+            timerArcLayer.shadowOpacity = (sleepSetMinutes > 0) ? 0.65 : 0.0
+            timerArcLayer.shadowOffset = .zero
+        } else {
+            timerArcLayer.shadowOpacity = 0.0
+        }
+
+        let totalSec = max(0, sleepSetMinutes * 60)
+        let progressRatio: CGFloat
+        let hasConfiguredTime = (sleepSetMinutes > 0)
+
+        if isSleepTimerActive && hasConfiguredTime {
+            let clampedElapsed = min(max(0, sleepElapsedSeconds), totalSec)
+            let remaining = max(0, totalSec - clampedElapsed)
+            timerTimeLabel.text = formatMMSS(remaining)
+            timerTimeLabel.textColor = accent
+            timerIconView.tintColor = accent
+            progressRatio = CGFloat(remaining) / 3600.0
+        } else if hasConfiguredTime {
+            timerTimeLabel.text = formatMMSS(totalSec)
+            timerTimeLabel.textColor = centerButtonTextColor()
+            timerIconView.tintColor = centerButtonIconTintColor()
+            progressRatio = CGFloat(sleepSetMinutes) / 60.0
+        } else {
+            timerIconView.tintColor = isTimerEditingMode ? accent : centerButtonIconTintColor()
+            progressRatio = 0.0
+        }
+
+        // Update center layout between OFF icon and icon + time
+        let targetIconY: CGFloat = hasConfiguredTime ? -15.0 : 0.0
+        let targetIconSize: CGFloat = hasConfiguredTime ? 16.0 : 32.0
+        let targetTimeAlpha: CGFloat = hasConfiguredTime ? 1.0 : 0.0
+        if timerIconCenterYConstraint.constant != targetIconY || timerTimeLabel.alpha != targetTimeAlpha {
+            timerIconCenterYConstraint.constant = targetIconY
+            timerIconWidthConstraint.constant = targetIconSize
+            timerIconHeightConstraint.constant = targetIconSize
+            if animated && isTimerOverlayVisible {
+                UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
+                    self.timerCenterContainer.layoutIfNeeded()
+                    self.timerTimeLabel.alpha = targetTimeAlpha
+                }
+            } else {
+                timerCenterContainer.layoutIfNeeded()
+                timerTimeLabel.alpha = targetTimeAlpha
+            }
+        }
+
+        let isResettingToOff = (previousSetMinutes > 0 && sleepSetMinutes == 0 && !isSleepTimerActive)
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(isResettingToOff ? 0.42 : (isSleepTimerActive ? 0.28 : 0.14))
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
+        timerArcLayer.strokeEnd = min(max(progressRatio, 0.0), 1.0)
+        CATransaction.commit()
+
+        // Smooth center button focus border while editing timer
+        let targetBorderWidth: CGFloat = isTimerEditingMode ? 1.5 : 0.0
+        let targetBorderColor: CGColor = (isTimerEditingMode ? accent.withAlphaComponent(0.75) : UIColor.clear).cgColor
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(animated ? 0.24 : 0.0)
+        centerButton.layer.borderWidth = targetBorderWidth
+        centerButton.layer.borderColor = targetBorderColor
+        CATransaction.commit()
+
+        let shouldShowOverlay = isTimerEditingMode || isSleepTimerActive || hasConfiguredTime
+        setTimerOverlayVisible(shouldShowOverlay, delayedForNaturalReset: isResettingToOff && !isTimerEditingMode, animated: animated)
+    }
+
+    private func setTimerOverlayVisible(_ visible: Bool, delayedForNaturalReset: Bool, animated: Bool) {
+        guard visible != isTimerOverlayVisible else { return }
+        isTimerOverlayVisible = visible
+        timerOverlayToken &+= 1
+        let token = timerOverlayToken
+
+        if visible {
+            timerCenterContainer.isHidden = false
+            timerRingContainerLayer.isHidden = false
+
+            if animated {
+                timerCenterContainer.alpha = 0.0
+                timerCenterContainer.transform = CGAffineTransform(scaleX: 0.82, y: 0.82)
+                UIView.animate(
+                    withDuration: 0.34,
+                    delay: 0,
+                    usingSpringWithDamping: 0.84,
+                    initialSpringVelocity: 0.18,
+                    options: [.curveEaseOut, .beginFromCurrentState]
+                ) {
+                    guard self.timerOverlayToken == token else { return }
+                    self.timerCenterContainer.alpha = 1.0
+                    self.timerCenterContainer.transform = .identity
+                }
+
+                CATransaction.begin()
+                CATransaction.setAnimationDuration(0.32)
+                CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+                timerRingContainerLayer.opacity = 1.0
+                timerRingContainerLayer.transform = CATransform3DIdentity
+                CATransaction.commit()
+            } else {
+                timerCenterContainer.alpha = 1.0
+                timerCenterContainer.transform = .identity
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                timerRingContainerLayer.opacity = 1.0
+                timerRingContainerLayer.transform = CATransform3DIdentity
+                CATransaction.commit()
+            }
+        } else {
+            let performHideAnimation = { [weak self] in
+                guard let self = self, self.timerOverlayToken == token, !self.isTimerOverlayVisible else { return }
+                if animated {
+                    UIView.animate(
+                        withDuration: 0.24,
+                        delay: 0,
+                        options: [.curveEaseIn, .beginFromCurrentState],
+                        animations: {
+                            self.timerCenterContainer.alpha = 0.0
+                            self.timerCenterContainer.transform = CGAffineTransform(scaleX: 0.82, y: 0.82)
+                        },
+                        completion: { _ in
+                            guard self.timerOverlayToken == token, !self.isTimerOverlayVisible else { return }
+                            self.timerCenterContainer.isHidden = true
+                            self.timerCenterContainer.transform = .identity
+                        }
+                    )
+
+                    CATransaction.begin()
+                    CATransaction.setAnimationDuration(0.24)
+                    CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeIn))
+                    CATransaction.setCompletionBlock {
+                        guard self.timerOverlayToken == token, !self.isTimerOverlayVisible else { return }
+                        self.timerRingContainerLayer.isHidden = true
+                        self.timerRingContainerLayer.transform = CATransform3DIdentity
+                    }
+                    self.timerRingContainerLayer.opacity = 0.0
+                    self.timerRingContainerLayer.transform = CATransform3DMakeScale(0.96, 0.96, 1.0)
+                    CATransaction.commit()
+                } else {
+                    self.timerCenterContainer.alpha = 0.0
+                    self.timerCenterContainer.isHidden = true
+                    self.timerCenterContainer.transform = .identity
+                    CATransaction.begin()
+                    CATransaction.setDisableActions(true)
+                    self.timerRingContainerLayer.opacity = 0.0
+                    self.timerRingContainerLayer.isHidden = true
+                    self.timerRingContainerLayer.transform = CATransform3DIdentity
+                    CATransaction.commit()
+                }
+            }
+
+            if delayedForNaturalReset && animated {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30, execute: performHideAnimation)
+            } else {
+                performHideAnimation()
+            }
+        }
+    }
+
+    private func makeCircularTimerIcon(size: CGSize) -> UIImage? {
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        defer { UIGraphicsEndImageContext() }
+        guard let ctx = UIGraphicsGetCurrentContext() else { return nil }
+
+        ctx.setStrokeColor(UIColor.white.cgColor)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+
+        let w = size.width
+        let h = size.height
+        let center = CGPoint(x: w / 2.0, y: h / 2.0 + 1.8)
+        let r: CGFloat = min(w, h) * 0.34
+
+        ctx.setLineWidth(2.0)
+        ctx.move(to: CGPoint(x: center.x - 3.6, y: center.y - r - 4.4))
+        ctx.addLine(to: CGPoint(x: center.x + 3.6, y: center.y - r - 4.4))
+        ctx.move(to: CGPoint(x: center.x, y: center.y - r - 4.4))
+        ctx.addLine(to: CGPoint(x: center.x, y: center.y - r - 0.8))
+        ctx.strokePath()
+
+        ctx.setLineWidth(2.2)
+        ctx.addArc(center: center, radius: r, startAngle: 0, endAngle: .pi * 2.0, clockwise: false)
+        ctx.strokePath()
+
+        ctx.setLineWidth(2.0)
+        ctx.move(to: center)
+        ctx.addLine(to: CGPoint(x: center.x, y: center.y - r * 0.56))
+        ctx.move(to: center)
+        ctx.addLine(to: CGPoint(x: center.x + r * 0.42, y: center.y + r * 0.16))
+        ctx.strokePath()
+
+        return UIGraphicsGetImageFromCurrentImageContext()?.withRenderingMode(.alwaysTemplate)
     }
 
     private func makeNextIcon(size: CGSize) -> UIImage? {
@@ -161,6 +484,36 @@ class ClickWheelView: UIView {
         )
         wheelLayer.path = UIBezierPath(ovalIn: wheelRect).cgPath
 
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let wheelOuterRadius = side / 2.0
+        let timerRingRadius = wheelOuterRadius + 6.5
+        let ticksInnerBase = timerRingRadius + 4.5
+
+        let ticksPath = UIBezierPath()
+        for i in 0..<60 {
+            let angle = (CGFloat(i) / 60.0) * 2.0 * .pi - .pi / 2.0
+            let isMajor = (i % 5 == 0)
+            let outerTickR = ticksInnerBase + (isMajor ? 4.2 : 2.2)
+            ticksPath.move(to: CGPoint(x: center.x + cos(angle) * ticksInnerBase, y: center.y + sin(angle) * ticksInnerBase))
+            ticksPath.addLine(to: CGPoint(x: center.x + cos(angle) * outerTickR, y: center.y + sin(angle) * outerTickR))
+        }
+        timerRingContainerLayer.frame = bounds
+        timerTicksLayer.frame = bounds
+        timerTicksLayer.lineWidth = 1.15
+        timerTicksLayer.path = ticksPath.cgPath
+
+        let ringArcPath = UIBezierPath(
+            arcCenter: center,
+            radius: timerRingRadius,
+            startAngle: -.pi / 2.0,
+            endAngle: 1.5 * .pi,
+            clockwise: true
+        ).cgPath
+        timerTrackLayer.frame = bounds
+        timerTrackLayer.path = ringArcPath
+        timerArcLayer.frame = bounds
+        timerArcLayer.path = ringArcPath
+
         let centerSide = side * 0.36
         centerButton.frame = CGRect(
             x: (bounds.width - centerSide) / 2.0,
@@ -177,9 +530,34 @@ class ClickWheelView: UIView {
         nextIconView.frame = CGRect(x: wheelRect.maxX - inset - 22, y: (bounds.height - 14) / 2.0, width: 24, height: 14)
     }
 
+    @objc private func didTouchDownCenter() {
+        didTriggerCenterLongPress = false
+    }
+
     @objc private func didTapCenter() {
+        if didTriggerCenterLongPress {
+            didTriggerCenterLongPress = false
+            return
+        }
         playClickSound()
         delegate?.clickWheelDidPressSelect()
+    }
+
+    @objc private func handleCenterLongPress(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            didTriggerCenterLongPress = true
+            let haptic = UIImpactFeedbackGenerator(style: .medium)
+            haptic.impactOccurred()
+            playClickSound()
+            delegate?.clickWheelDidLongPressSelect()
+        case .ended, .cancelled, .failed:
+            DispatchQueue.main.async { [weak self] in
+                self?.didTriggerCenterLongPress = false
+            }
+        default:
+            break
+        }
     }
 
     private func playClickSound() {

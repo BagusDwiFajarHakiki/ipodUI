@@ -28,7 +28,8 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     private var sleepSetMinutes: Int = 0
     private var sleepElapsedSeconds: Int = 0
     private var isSleepTimerActive: Bool = false
-    private var sleepActivationTimer: Timer?
+    private var isWheelTimerMode: Bool = false
+    private var barModeBeforeWheelTimer: IPodNowPlayingBarMode = .duration
     private var sleepCountdownTimer: Timer?
     private var sleepFadeTimer: Timer?
     private var sleepVolumeScale: Float = 1.0
@@ -100,18 +101,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
 
         screenView.onSeekRatioChanged = { [weak self] ratio, isFinished in
-            guard let self = self else { return }
-            switch self.nowPlayingBarMode {
-            case .duration, .lyrics:
-                self.seekToRatio(ratio, isFinished: isFinished)
-            case .sleepTimer:
-                let mins = Int(round(min(max(ratio, 0.0), 1.0) * 60.0))
-                self.setSleepTimerMinutes(mins, startActivationCountdown: isFinished)
-            }
-        }
-
-        screenView.onSleepTimerMinutesChanged = { [weak self] mins, isFinished in
-            self?.setSleepTimerMinutes(mins, startActivationCountdown: isFinished && mins > 0)
+            self?.seekToRatio(ratio, isFinished: isFinished)
         }
 
         screenView.onActiveCoverImageChanged = { [weak self] image in
@@ -859,14 +849,16 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     // MARK: - ClickWheelDelegate
     func clickWheelDidScroll(steps: Int) {
+        if isWheelTimerMode {
+            adjustSleepTimer(byMinutes: steps)
+            return
+        }
         if isNowPlayingActive {
             switch nowPlayingBarMode {
             case .duration:
                 seekBy(seconds: Double(steps) * 5.0)
             case .lyrics:
                 screenView.scrollLyrics(by: steps)
-            case .sleepTimer:
-                adjustSleepTimer(byMinutes: steps)
             }
             return
         }
@@ -875,11 +867,15 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     func clickWheelDidPressMenu() {
-        if isNowPlayingActive {
-            if nowPlayingBarMode == .sleepTimer && (sleepSetMinutes > 0 || isSleepTimerActive || sleepActivationTimer != nil) {
-                setSleepTimerMinutes(0, startActivationCountdown: false)
-                return
+        if isWheelTimerMode {
+            if sleepSetMinutes > 0 || isSleepTimerActive {
+                setSleepTimerMinutes(0)
+            } else {
+                exitWheelTimerMode()
             }
+            return
+        }
+        if isNowPlayingActive {
             let activeIndex: Int
             if let top = menuStack.last, case .allSongs = top.node,
                currentQueue.indices.contains(currentTrackIndex),
@@ -917,26 +913,29 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         }
     }
 
+    func clickWheelDidLongPressSelect() {
+        if isWheelTimerMode {
+            exitWheelTimerMode()
+            return
+        }
+        enterWheelTimerMode()
+    }
+
     func clickWheelDidPressSelect() {
-        if isNowPlayingActive {
-            switch nowPlayingBarMode {
-            case .duration:
-                nowPlayingBarMode = .lyrics
-            case .lyrics:
-                nowPlayingBarMode = .sleepTimer
-            case .sleepTimer:
-                nowPlayingBarMode = .duration
+        if isWheelTimerMode {
+            if sleepSetMinutes > 0 && !isSleepTimerActive {
+                activateSleepTimer()
             }
+            exitWheelTimerMode()
+            return
+        }
+        if isNowPlayingActive {
+            nowPlayingBarMode = (nowPlayingBarMode == .duration) ? .lyrics : .duration
             if nowPlayingBarMode == .lyrics, currentQueue.indices.contains(currentTrackIndex) {
                 prefetchLyricsIfNeeded(for: currentQueue[currentTrackIndex])
             }
             updateIdleTimerForLyrics()
-            screenView.setNowPlayingBarMode(
-                nowPlayingBarMode,
-                sleepSetMinutes: sleepSetMinutes,
-                sleepElapsedSeconds: sleepElapsedSeconds,
-                isSleepActive: isSleepTimerActive
-            )
+            screenView.setNowPlayingBarMode(nowPlayingBarMode)
             return
         }
         guard let top = menuStack.last else { return }
@@ -1145,12 +1144,7 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         isNowPlayingActive = true
         if !wasAlreadyNowPlaying {
             nowPlayingBarMode = .duration
-            screenView.setNowPlayingBarMode(
-                .duration,
-                sleepSetMinutes: sleepSetMinutes,
-                sleepElapsedSeconds: sleepElapsedSeconds,
-                isSleepActive: isSleepTimerActive
-            )
+            screenView.setNowPlayingBarMode(.duration)
         }
         updateIdleTimerForLyrics()
         let track = currentQueue[currentTrackIndex]
@@ -1527,14 +1521,40 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         playNextTrack()
     }
 
-    private func adjustSleepTimer(byMinutes delta: Int) {
-        let nextMinutes = min(max(0, sleepSetMinutes + delta), 60)
-        setSleepTimerMinutes(nextMinutes, startActivationCountdown: true)
+    private func enterWheelTimerMode() {
+        barModeBeforeWheelTimer = nowPlayingBarMode
+        isWheelTimerMode = true
+        screenView.setSleepTimerHeaderActive(true, animated: true)
+        clickWheel.updateSleepTimer(
+            setMinutes: sleepSetMinutes,
+            elapsedSeconds: sleepElapsedSeconds,
+            isActive: isSleepTimerActive,
+            isEditing: true
+        )
     }
 
-    private func setSleepTimerMinutes(_ minutes: Int, startActivationCountdown: Bool) {
-        sleepActivationTimer?.invalidate()
-        sleepActivationTimer = nil
+    private func exitWheelTimerMode() {
+        isWheelTimerMode = false
+        if isNowPlayingActive && nowPlayingBarMode != barModeBeforeWheelTimer {
+            nowPlayingBarMode = barModeBeforeWheelTimer
+            updateIdleTimerForLyrics()
+            screenView.setNowPlayingBarMode(nowPlayingBarMode)
+        }
+        screenView.setSleepTimerHeaderActive(false, animated: true)
+        clickWheel.updateSleepTimer(
+            setMinutes: sleepSetMinutes,
+            elapsedSeconds: sleepElapsedSeconds,
+            isActive: isSleepTimerActive,
+            isEditing: false
+        )
+    }
+
+    private func adjustSleepTimer(byMinutes delta: Int) {
+        let nextMinutes = min(max(0, sleepSetMinutes + delta), 60)
+        setSleepTimerMinutes(nextMinutes)
+    }
+
+    private func setSleepTimerMinutes(_ minutes: Int) {
         sleepCountdownTimer?.invalidate()
         sleepCountdownTimer = nil
         sleepFadeTimer?.invalidate()
@@ -1545,17 +1565,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
         sleepSetMinutes = min(max(0, minutes), 60)
         sleepElapsedSeconds = 0
-        screenView.updateSleepTimerDisplay(
+        clickWheel.updateSleepTimer(
             setMinutes: sleepSetMinutes,
             elapsedSeconds: 0,
-            isActive: false
+            isActive: false,
+            isEditing: isWheelTimerMode
         )
-
-        if sleepSetMinutes >= 1 && startActivationCountdown {
-            sleepActivationTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
-                self?.activateSleepTimer()
-            }
-        }
     }
 
     private func startSleepAudioFadeOut(duration: TimeInterval) {
@@ -1580,7 +1595,6 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
     }
 
     private func activateSleepTimer() {
-        sleepActivationTimer = nil
         guard sleepSetMinutes >= 1 else { return }
 
         sleepFadeTimer?.invalidate()
@@ -1589,10 +1603,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         player?.volume = 1.0
         isSleepTimerActive = true
         sleepElapsedSeconds = 0
-        screenView.updateSleepTimerDisplay(
+        clickWheel.updateSleepTimer(
             setMinutes: sleepSetMinutes,
             elapsedSeconds: 0,
-            isActive: true
+            isActive: true,
+            isEditing: false
         )
 
         sleepCountdownTimer?.invalidate()
@@ -1600,10 +1615,11 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             guard let self = self else { return }
             let targetSeconds = self.sleepSetMinutes * 60
             self.sleepElapsedSeconds = min(targetSeconds, self.sleepElapsedSeconds + 1)
-            self.screenView.updateSleepTimerDisplay(
+            self.clickWheel.updateSleepTimer(
                 setMinutes: self.sleepSetMinutes,
                 elapsedSeconds: self.sleepElapsedSeconds,
-                isActive: true
+                isActive: true,
+                isEditing: self.isWheelTimerMode
             )
             let remaining = targetSeconds - self.sleepElapsedSeconds
             if remaining <= 5 && remaining > 0 && self.sleepFadeTimer == nil {
@@ -1617,7 +1633,12 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
                 self.isSleepTimerActive = false
                 self.sleepSetMinutes = 0
                 self.sleepElapsedSeconds = 0
-                self.screenView.updateSleepTimerDisplay(setMinutes: 0, elapsedSeconds: 0, isActive: false)
+                self.clickWheel.updateSleepTimer(
+                    setMinutes: 0,
+                    elapsedSeconds: 0,
+                    isActive: false,
+                    isEditing: self.isWheelTimerMode
+                )
                 if self.isPlaying {
                     self.togglePlayPause()
                 }
