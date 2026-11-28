@@ -876,6 +876,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
 
     func clickWheelDidPressMenu() {
         if isNowPlayingActive {
+            if nowPlayingBarMode == .sleepTimer && (sleepSetMinutes > 0 || isSleepTimerActive || sleepActivationTimer != nil) {
+                setSleepTimerMinutes(0, startActivationCountdown: false)
+                return
+            }
             let activeIndex: Int
             if let top = menuStack.last, case .allSongs = top.node,
                currentQueue.indices.contains(currentTrackIndex),
