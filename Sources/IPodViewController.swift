@@ -128,6 +128,10 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             self?.handleNowPlayingDownloadAction()
         }
 
+        screenView.onArtworkDoubleTapped = { [weak self] in
+            self?.handleLocalArtworkDoubleTapDelete()
+        }
+
         IPodStreamingLibrary.shared.onDownloadStateChanged = { [weak self] videoId, state in
             guard let self = self,
                   self.currentQueue.indices.contains(self.currentTrackIndex) else { return }
@@ -1173,7 +1177,9 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
         case .notDownloaded:
             IPodStreamingLibrary.shared.downloadTrack(track)
         case .downloading:
-            screenView.showStatusBanner("Sedang mengunduh...")
+            if IPodStreamingLibrary.shared.cancelDownload(for: track) {
+                screenView.showStatusBanner("Unduhan dibatalkan")
+            }
         case .downloaded:
             let alert = UIAlertController(
                 title: "Hapus Lagu?",
@@ -1188,6 +1194,76 @@ class IPodViewController: UIViewController, ClickWheelDelegate {
             })
             present(alert, animated: true)
         }
+    }
+
+    private func handleLocalArtworkDoubleTapDelete() {
+        guard isNowPlayingActive, currentQueue.indices.contains(currentTrackIndex) else { return }
+        let track = currentQueue[currentTrackIndex]
+        guard !track.id.hasPrefix("innertube_") else { return }
+
+        guard let fileURL = track.assetURL, fileURL.isFileURL else {
+            screenView.showStatusBanner("Lagu Apple Music tidak bisa dihapus")
+            return
+        }
+
+        let targetIdx = currentTrackIndex
+        let alert = UIAlertController(
+            title: "Hapus Lagu?",
+            message: "Hapus \"\(track.title)\" dari daftar lagu Music?",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Batal", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Hapus", style: .destructive) { [weak self] _ in
+            self?.deleteLocalMusicTrack(at: targetIdx, expectedTrackId: track.id, fileURL: fileURL)
+        })
+        present(alert, animated: true)
+    }
+
+    private func deleteLocalMusicTrack(at index: Int, expectedTrackId: String, fileURL: URL) {
+        if currentQueue.indices.contains(index), currentQueue[index].id == expectedTrackId {
+            clearItemObservers()
+            player?.pause()
+            player = nil
+        }
+
+        do {
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                try FileManager.default.removeItem(at: fileURL)
+            }
+        } catch {
+            screenView.showStatusBanner("Gagal menghapus file lagu")
+            return
+        }
+
+        IPodStreamingLibrary.shared.unregisterDownloadedFile(at: fileURL)
+        IPodMusicLibrary.shared.reloadAllSources()
+
+        for i in menuStack.indices {
+            if case .playlistTracks(let group) = menuStack[i].node {
+                if let refreshed = IPodMusicLibrary.shared.playlists.first(where: { $0.name == group.name }) {
+                    menuStack[i].node = .playlistTracks(refreshed)
+                } else {
+                    let emptyGroup = IPodPlaylistGroup(name: group.name, tracks: [], nativePlaylist: group.nativePlaylist)
+                    menuStack[i].node = .playlistTracks(emptyGroup)
+                }
+            }
+        }
+
+        if let removalIdx = currentQueue.firstIndex(where: { $0.id == expectedTrackId }) {
+            currentQueue.remove(at: removalIdx)
+            if currentQueue.isEmpty {
+                isPlaying = false
+                playingTrackArtwork = nil
+                screenView.updatePlayState(isPlaying: false)
+                updateAmbientGlow(from: nil)
+                renderTopMenu(restoreIndex: 0, animateFromNowPlaying: true)
+            } else {
+                currentTrackIndex = min(removalIdx, currentQueue.count - 1)
+                playTrack(at: currentTrackIndex, transitionDirection: 1)
+            }
+        }
+
+        screenView.showStatusBanner("Lagu dihapus dari Music")
     }
 
     private func clearItemObservers() {

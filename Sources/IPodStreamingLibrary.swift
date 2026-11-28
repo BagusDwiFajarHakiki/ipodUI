@@ -202,6 +202,7 @@ final class IPodStreamingLibrary {
     private var resolvedStreamCache: [String: IPodResolvedStream] = [:]
     private var activeDownloadStates: [String: Double] = [:]
     private var activeDownloadSessions: [String: StreamAudioDownloadSession] = [:]
+    private var activeDownloadExporters: [String: AVAssetExportSession] = [:]
     private let downloadStateLock = NSLock()
     private let downloadedMapDefaultsKey = "ipod_downloaded_streaming_map_v1"
     private var realArtworkByURL: [String: UIImage] = [:]
@@ -1935,11 +1936,55 @@ final class IPodStreamingLibrary {
         }
     }
 
+    private func isDownloadActive(videoId: String) -> Bool {
+        downloadStateLock.lock()
+        let active = (activeDownloadStates[videoId] != nil)
+        downloadStateLock.unlock()
+        return active
+    }
+
+    func unregisterDownloadedFile(at fileURL: URL) {
+        let targetName = fileURL.lastPathComponent
+        downloadStateLock.lock()
+        var map = loadDownloadedMap()
+        let matchingKeys = map.filter { $0.value == targetName }.map { $0.key }
+        for key in matchingKeys {
+            map.removeValue(forKey: key)
+        }
+        if !matchingKeys.isEmpty {
+            saveDownloadedMap(map)
+        }
+        downloadStateLock.unlock()
+
+        for key in matchingKeys {
+            emitDownloadState(videoId: key, state: .notDownloaded)
+        }
+    }
+
+    @discardableResult
+    func cancelDownload(for track: IPodTrack) -> Bool {
+        guard track.id.hasPrefix("innertube_"),
+              let vid = videoId(for: track), !vid.isEmpty else { return false }
+
+        downloadStateLock.lock()
+        let wasActive = activeDownloadStates.removeValue(forKey: vid) != nil
+        let session = activeDownloadSessions.removeValue(forKey: vid)
+        let exporter = activeDownloadExporters.removeValue(forKey: vid)
+        downloadStateLock.unlock()
+
+        guard wasActive else { return false }
+        session?.cancel()
+        exporter?.cancelExport()
+        emitDownloadState(videoId: vid, state: .notDownloaded)
+        return true
+    }
+
     private func sanitizedAudioFilename(title: String, videoId: String) -> String {
         let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
         let cleaned = title.components(separatedBy: invalid).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         let collapsed = cleaned.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        let base = collapsed.isEmpty ? videoId : String(collapsed.prefix(56))
+        let trimmedDots = collapsed.trimmingCharacters(in: CharacterSet(charactersIn: ". ").union(.whitespacesAndNewlines))
+        let base = trimmedDots.isEmpty ? videoId : String(trimmedDots.prefix(56))
         return "\(base) [\(videoId)].m4a"
     }
 
@@ -1955,7 +2000,7 @@ final class IPodStreamingLibrary {
         emitDownloadState(videoId: vid, state: .downloading(progress: 0.02))
 
         collectDirectDownloadCandidates(for: track) { [weak self] candidates in
-            guard let self = self else { return }
+            guard let self = self, self.isDownloadActive(videoId: vid) else { return }
             guard !candidates.isEmpty else {
                 self.finishDownloadWithFailure(videoId: vid, reason: "Stream tidak mendukung unduhan")
                 return
@@ -2014,6 +2059,7 @@ final class IPodStreamingLibrary {
         track: IPodTrack,
         videoId: String
     ) {
+        guard isDownloadActive(videoId: videoId) else { return }
         guard candidates.indices.contains(index) else {
             finishDownloadWithFailure(videoId: videoId, reason: "Gagal mengunduh audio")
             return
@@ -2039,10 +2085,19 @@ final class IPodStreamingLibrary {
                 self.emitDownloadState(videoId: videoId, state: .downloading(progress: mapped))
             },
             onComplete: { [weak self] tempURL, errorReason in
-                guard let self = self else { return }
+                guard let self = self else {
+                    if let tempURL = tempURL { try? FileManager.default.removeItem(at: tempURL) }
+                    return
+                }
                 self.downloadStateLock.lock()
                 self.activeDownloadSessions.removeValue(forKey: videoId)
+                let stillActive = (self.activeDownloadStates[videoId] != nil)
                 self.downloadStateLock.unlock()
+
+                guard stillActive else {
+                    if let tempURL = tempURL { try? FileManager.default.removeItem(at: tempURL) }
+                    return
+                }
 
                 if let tempURL = tempURL {
                     self.exportDownloadedAudioToM4A(tempFileURL: tempURL, track: track, videoId: videoId)
@@ -2054,12 +2109,22 @@ final class IPodStreamingLibrary {
         )
 
         downloadStateLock.lock()
+        guard activeDownloadStates[videoId] != nil else {
+            downloadStateLock.unlock()
+            dlSession.cancel()
+            return
+        }
         activeDownloadSessions[videoId] = dlSession
         downloadStateLock.unlock()
     }
 
     private func exportDownloadedAudioToM4A(tempFileURL: URL, track: IPodTrack, videoId: String) {
         downloadStateLock.lock()
+        guard activeDownloadStates[videoId] != nil else {
+            downloadStateLock.unlock()
+            try? FileManager.default.removeItem(at: tempFileURL)
+            return
+        }
         activeDownloadStates[videoId] = 0.85
         downloadStateLock.unlock()
         emitDownloadState(videoId: videoId, state: .downloading(progress: 0.85))
@@ -2105,6 +2170,15 @@ final class IPodStreamingLibrary {
         exporter.metadata = metadata
         exporter.shouldOptimizeForNetworkUse = true
 
+        downloadStateLock.lock()
+        guard activeDownloadStates[videoId] != nil else {
+            downloadStateLock.unlock()
+            try? FileManager.default.removeItem(at: tempFileURL)
+            return
+        }
+        activeDownloadExporters[videoId] = exporter
+        downloadStateLock.unlock()
+
         DispatchQueue.main.async {
             let pollTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self, weak exporter] timer in
                 guard let self = self, let exp = exporter else {
@@ -2114,11 +2188,16 @@ final class IPodStreamingLibrary {
                 if exp.status == .exporting || exp.status == .waiting {
                     let mapped = 0.85 + Double(exp.progress) * 0.14
                     self.downloadStateLock.lock()
-                    if self.activeDownloadStates[videoId] != nil {
+                    let isActive = (self.activeDownloadStates[videoId] != nil)
+                    if isActive {
                         self.activeDownloadStates[videoId] = mapped
                     }
                     self.downloadStateLock.unlock()
-                    self.emitDownloadState(videoId: videoId, state: .downloading(progress: mapped))
+                    if isActive {
+                        self.emitDownloadState(videoId: videoId, state: .downloading(progress: mapped))
+                    } else {
+                        timer.invalidate()
+                    }
                 } else {
                     timer.invalidate()
                 }
@@ -2129,6 +2208,16 @@ final class IPodStreamingLibrary {
                 try? FileManager.default.removeItem(at: tempFileURL)
 
                 guard let self = self else { return }
+                self.downloadStateLock.lock()
+                self.activeDownloadExporters.removeValue(forKey: videoId)
+                let stillActive = (self.activeDownloadStates[videoId] != nil)
+                self.downloadStateLock.unlock()
+
+                if exporter.status == .cancelled || !stillActive {
+                    try? FileManager.default.removeItem(at: destURL)
+                    return
+                }
+
                 switch exporter.status {
                 case .completed:
                     self.downloadStateLock.lock()
@@ -2157,9 +2246,12 @@ final class IPodStreamingLibrary {
 
     private func finishDownloadWithFailure(videoId: String, reason: String) {
         downloadStateLock.lock()
-        activeDownloadStates.removeValue(forKey: videoId)
+        let wasActive = (activeDownloadStates.removeValue(forKey: videoId) != nil)
         activeDownloadSessions.removeValue(forKey: videoId)
+        activeDownloadExporters.removeValue(forKey: videoId)
         downloadStateLock.unlock()
+
+        guard wasActive else { return }
 
         DispatchQueue.main.async {
             self.onDownloadStateChanged?(videoId, .notDownloaded)

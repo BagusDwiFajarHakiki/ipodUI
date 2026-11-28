@@ -467,6 +467,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     var onStreamingRefreshTapped: (() -> Void)?
     var onStreamingSearchTapped: (() -> Void)?
     var onDownloadButtonTapped: (() -> Void)?
+    var onArtworkDoubleTapped: (() -> Void)?
 
     // Modern Seamless Status Bar
     private let headerBar = UIView()
@@ -481,8 +482,11 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
     private var batteryWidthConstraint: NSLayoutConstraint!
     private var clockTimer: Timer?
 
-    // Banner Status Error
+    // Banner Status Toast
+    private let statusBannerContainer = UIView()
+    private let statusBannerAccentView = UIView()
     private let statusBannerLabel = UILabel()
+    private var statusBannerIsError = false
     private var statusBannerTimer: Timer?
 
     // Menu List View
@@ -745,7 +749,11 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         artworkView.layer.borderWidth = 0
         artworkView.layer.borderColor = nil
         artworkView.backgroundColor = UIColor(white: 0.25, alpha: 1.0)
+        artworkView.isUserInteractionEnabled = true
         artworkView.translatesAutoresizingMaskIntoConstraints = false
+        let doubleTapArtwork = UITapGestureRecognizer(target: self, action: #selector(handleArtworkDoubleTap))
+        doubleTapArtwork.numberOfTapsRequired = 2
+        artworkView.addGestureRecognizer(doubleTapArtwork)
         nowPlayingContainer.addSubview(artworkView)
 
         artworkReflectionView.contentMode = .scaleAspectFill
@@ -874,16 +882,26 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         progressKnob.translatesAutoresizingMaskIntoConstraints = false
         progressTouchArea.addSubview(progressKnob)
 
-        statusBannerLabel.font = UIFont.systemFont(ofSize: 10.5, weight: .bold)
-        statusBannerLabel.textColor = .white
-        statusBannerLabel.backgroundColor = UIColor(red: 0.78, green: 0.16, blue: 0.16, alpha: 0.92)
-        statusBannerLabel.textAlignment = .center
-        statusBannerLabel.layer.cornerRadius = 5
-        statusBannerLabel.clipsToBounds = true
+        statusBannerContainer.layer.cornerRadius = 13
+        statusBannerContainer.layer.borderWidth = 0.8
+        statusBannerContainer.layer.shadowColor = UIColor.black.cgColor
+        statusBannerContainer.layer.shadowRadius = 7
+        statusBannerContainer.layer.shadowOffset = CGSize(width: 0, height: 3)
+        statusBannerContainer.isUserInteractionEnabled = false
+        statusBannerContainer.alpha = 0.0
+        statusBannerContainer.transform = CGAffineTransform(translationX: 0, y: -10).scaledBy(x: 0.94, y: 0.94)
+        statusBannerContainer.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(statusBannerContainer)
+
+        statusBannerAccentView.layer.cornerRadius = 3.0
+        statusBannerAccentView.translatesAutoresizingMaskIntoConstraints = false
+        statusBannerContainer.addSubview(statusBannerAccentView)
+
+        statusBannerLabel.font = UIFont.systemFont(ofSize: 11.0, weight: .semibold)
+        statusBannerLabel.textAlignment = .left
         statusBannerLabel.numberOfLines = 2
-        statusBannerLabel.alpha = 0.0
         statusBannerLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(statusBannerLabel)
+        statusBannerContainer.addSubview(statusBannerLabel)
 
         UIDevice.current.isBatteryMonitoringEnabled = true
         let level = UIDevice.current.batteryLevel
@@ -1065,23 +1083,85 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
             progressKnob.widthAnchor.constraint(equalToConstant: 10),
             progressKnob.heightAnchor.constraint(equalToConstant: 10),
 
-            statusBannerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            statusBannerLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            statusBannerLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+            statusBannerContainer.topAnchor.constraint(equalTo: headerBar.bottomAnchor, constant: 8),
+            statusBannerContainer.centerXAnchor.constraint(equalTo: centerXAnchor),
+            statusBannerContainer.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 16),
+            statusBannerContainer.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
+
+            statusBannerAccentView.leadingAnchor.constraint(equalTo: statusBannerContainer.leadingAnchor, constant: 11),
+            statusBannerAccentView.centerYAnchor.constraint(equalTo: statusBannerContainer.centerYAnchor),
+            statusBannerAccentView.widthAnchor.constraint(equalToConstant: 6),
+            statusBannerAccentView.heightAnchor.constraint(equalToConstant: 6),
+
+            statusBannerLabel.leadingAnchor.constraint(equalTo: statusBannerAccentView.trailingAnchor, constant: 7),
+            statusBannerLabel.trailingAnchor.constraint(equalTo: statusBannerContainer.trailingAnchor, constant: -12),
+            statusBannerLabel.topAnchor.constraint(equalTo: statusBannerContainer.topAnchor, constant: 6.5),
+            statusBannerLabel.bottomAnchor.constraint(equalTo: statusBannerContainer.bottomAnchor, constant: -6.5)
         ])
         NSLayoutConstraint.activate(titleNormalConstraints)
+    }
+
+    private func applyStatusBannerTheme() {
+        let errorAccent = UIColor(red: 0.88, green: 0.28, blue: 0.28, alpha: 1.0)
+        statusBannerAccentView.backgroundColor = statusBannerIsError ? errorAccent : theme.highlightTop
+        statusBannerLabel.textColor = theme.primaryText
+
+        switch theme {
+        case .darkPod:
+            statusBannerContainer.backgroundColor = UIColor(red: 0.13, green: 0.14, blue: 0.17, alpha: 0.94)
+            statusBannerContainer.layer.borderColor = (statusBannerIsError
+                ? errorAccent.withAlphaComponent(0.45)
+                : UIColor(white: 1.0, alpha: 0.18)).cgColor
+            statusBannerContainer.layer.shadowOpacity = 0.34
+        case .sepiaPod:
+            statusBannerContainer.backgroundColor = UIColor(red: 0.99, green: 0.96, blue: 0.90, alpha: 0.96)
+            statusBannerContainer.layer.borderColor = (statusBannerIsError
+                ? errorAccent.withAlphaComponent(0.38)
+                : theme.highlightTop.withAlphaComponent(0.34)).cgColor
+            statusBannerContainer.layer.shadowOpacity = 0.16
+        case .classicBlue:
+            statusBannerContainer.backgroundColor = UIColor(red: 0.98, green: 0.99, blue: 1.0, alpha: 0.96)
+            statusBannerContainer.layer.borderColor = (statusBannerIsError
+                ? errorAccent.withAlphaComponent(0.38)
+                : theme.highlightTop.withAlphaComponent(0.30)).cgColor
+            statusBannerContainer.layer.shadowOpacity = 0.14
+        }
     }
 
     func showStatusBanner(_ message: String) {
         statusBannerTimer?.invalidate()
         DispatchQueue.main.async {
+            let lower = message.lowercased()
+            self.statusBannerIsError = lower.contains("gagal")
+                || lower.contains("tidak bisa")
+                || lower.contains("tidak ada")
+                || lower.contains("kosong")
+                || lower.contains("belum ada")
+                || lower.contains("error")
+
             self.statusBannerLabel.text = message
-            UIView.animate(withDuration: 0.2) {
-                self.statusBannerLabel.alpha = 1.0
+            self.applyStatusBannerTheme()
+            self.bringSubviewToFront(self.statusBannerContainer)
+
+            if self.statusBannerContainer.alpha < 0.1 {
+                self.statusBannerContainer.transform = CGAffineTransform(translationX: 0, y: -10).scaledBy(x: 0.94, y: 0.94)
             }
-            self.statusBannerTimer = Timer.scheduledTimer(withTimeInterval: 3.5, repeats: false) { [weak self] _ in
-                UIView.animate(withDuration: 0.25) {
-                    self?.statusBannerLabel.alpha = 0.0
+            UIView.animate(
+                withDuration: 0.34,
+                delay: 0,
+                usingSpringWithDamping: 0.84,
+                initialSpringVelocity: 0.18,
+                options: [.curveEaseOut, .beginFromCurrentState]
+            ) {
+                self.statusBannerContainer.alpha = 1.0
+                self.statusBannerContainer.transform = .identity
+            }
+
+            let holdDuration: TimeInterval = self.statusBannerIsError ? 3.4 : 2.6
+            self.statusBannerTimer = Timer.scheduledTimer(withTimeInterval: holdDuration, repeats: false) { [weak self] _ in
+                UIView.animate(withDuration: 0.24, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+                    self?.statusBannerContainer.alpha = 0.0
+                    self?.statusBannerContainer.transform = CGAffineTransform(translationX: 0, y: -6).scaledBy(x: 0.96, y: 0.96)
                 }
             }
         }
@@ -1189,6 +1269,7 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
         tableView.reloadData()
         coverCollectionView.reloadData()
         downloadStatusButton.applyTheme(theme)
+        applyStatusBannerTheme()
         lyricStyledActiveByIndex.removeAll()
         instrumentalSpinnerView.setColor(theme == .darkPod ? .white : theme.highlightBottom)
         renderLyricSlots(animatedDirection: 0)
@@ -2645,6 +2726,11 @@ class IPodScreenView: UIView, UITableViewDataSource, UITableViewDelegate, UIColl
 
     @objc private func handleDownloadButtonTap() {
         onDownloadButtonTapped?()
+    }
+
+    @objc private func handleArtworkDoubleTap() {
+        guard !nowPlayingContainer.isHidden else { return }
+        onArtworkDoubleTapped?()
     }
 
     func updateVolumeDisplay(_ volume: Float) {
